@@ -15,7 +15,10 @@ BONDS_SHEET = "监控列表"
 ALERTS_SHEET = "提醒记录"
 GUIDE_SHEET = "使用说明"
 PARAMETERS_SHEET = "参数说明"
-WORKBOOK_SCHEMA_VERSION = "1.1.1"
+WORKBOOK_SCHEMA_VERSION = "1.1.3"
+DEFAULT_UPDATE_MANIFEST_URL = (
+    "https://github.com/hajiao/kzz-monitor/releases/latest/download/update-manifest.json"
+)
 
 BOND_HEADERS = [
     "启用", "转债代码", "名称", "卖出观察价", "回撤提醒%", "趋势窗口", "趋势最小跌幅",
@@ -43,7 +46,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "SMTP使用SSL": True,
     "邮件冷却分钟": 30,
     "日志保留天数": 30,
-    "更新清单地址": "",
+    "更新清单地址": DEFAULT_UPDATE_MANIFEST_URL,
     "启动时检查更新": True,
     "工作簿结构版本": WORKBOOK_SCHEMA_VERSION,
 }
@@ -288,7 +291,7 @@ def load_configuration(path: Path) -> tuple[AppSettings, list[BondConfig]]:
             smtp_ssl=_as_bool(raw.get("SMTP使用SSL", True)),
             email_cooldown_minutes=max(1, int(raw.get("邮件冷却分钟", 30))),
             log_retention_days=max(1, int(raw.get("日志保留天数", 30))),
-            update_manifest_url=str(raw.get("更新清单地址") or "").strip(),
+            update_manifest_url=str(raw.get("更新清单地址") or DEFAULT_UPDATE_MANIFEST_URL).strip(),
             check_updates_on_startup=_as_bool(raw.get("启动时检查更新", True)),
         )
         sheet = wb[BONDS_SHEET]
