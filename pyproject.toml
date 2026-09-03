@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kzz-monitor"
+version = "1.1.2"
+description = "低频可转债监控、Excel 面板和多渠道提醒"
+requires-python = ">=3.10"
+dependencies = [
+  "akshare>=1.16",
+  "openpyxl>=3.1",
+  "pandas>=2.1",
+  "pillow>=10.0",
+  "pystray>=0.19.5; platform_system == 'Windows' or platform_system == 'Darwin'",
+  "requests>=2.31",
+  "winotify>=1.1.0; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0"]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+kzz-monitor = "kzz_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["kzz_monitor*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

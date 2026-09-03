@@ -1,0 +1,35 @@
+name: Build macOS apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["mac-v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            artifact: KzzMonitor-macOS-Intel
+          - runner: macos-14-arm64
+            artifact: KzzMonitor-macOS-AppleSilicon
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build and test app
+        run: chmod +x build_macos.sh && ./build_macos.sh
+      - name: Ad-hoc sign app
+        run: codesign --force --deep --sign - release-macos/KzzMonitor.app
+      - name: Package artifact
+        run: ditto -c -k --sequesterRsrc --keepParent release-macos "${{ matrix.artifact }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+          if-no-files-found: error

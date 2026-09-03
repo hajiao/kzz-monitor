@@ -1,0 +1,636 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KzzMonitor 详细操作手册</title><style>
+:root{color-scheme:light}*{box-sizing:border-box}
+body{margin:0;background:#f3f6fa;color:#17202a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;line-height:1.72}
+.page{max-width:1050px;margin:28px auto;background:#fff;padding:56px 72px;box-shadow:0 8px 35px #18324a22;border-radius:12px}
+h1{color:#174f84;border-bottom:3px solid #2f80c9;padding-bottom:16px}h2{color:#1e659f;border-bottom:1px solid #d8e4ef;padding-bottom:8px;margin-top:38px}h3{color:#2974ab;margin-top:27px}
+table{border-collapse:collapse;width:100%;margin:16px 0;font-size:.94rem}th,td{border:1px solid #cbd9e6;padding:9px 12px;vertical-align:top}th{background:#eaf3fb;color:#174f84;text-align:left}tr:nth-child(even) td{background:#f8fbfe}
+code{font-family:Consolas,Menlo,monospace;background:#eef3f7;padding:2px 5px;border-radius:4px}pre{background:#152230;color:#e8f1f8;padding:16px;border-radius:8px;overflow:auto}pre code{background:transparent;padding:0}
+blockquote{margin:18px 0;padding:12px 18px;border-left:5px solid #e49b26;background:#fff7e7}a{color:#1769aa}
+@media print{body{background:#fff}.page{max-width:none;margin:0;padding:12mm 13mm;box-shadow:none;border-radius:0}table,pre,blockquote{break-inside:avoid}@page{size:A4;margin:10mm}}
+@media(max-width:700px){.page{margin:0;padding:24px 18px;border-radius:0}table{display:block;overflow-x:auto}}
+</style></head><body><main class="page"><h1 id="kzzmonitor">KzzMonitor 可转债监控系统详细操作手册</h1>
+<p><strong>适用版本：1.x（Windows / macOS）</strong><br />
+<strong>文档日期：2026-09-03</strong></p>
+<blockquote>
+<p>本工具用于个人数据整理和提醒，不构成任何投资建议。行情与评级来自第三方数据源，可能延迟、中断或变化。重要交易决定必须在券商终端复核。</p>
+</blockquote>
+<hr />
+<h2 id="1">1. 系统用途</h2>
+<p>KzzMonitor 是一个低频可转债监控程序。它可以：</p>
+<ol>
+<li>按设定间隔轮询已启用的可转债；</li>
+<li>获取现价、趋势、近一年最高价、监控峰值和强赎状态；</li>
+<li>从“安道全”Excel 导入评级、建仓线、加仓线和重仓线；</li>
+<li>触发建仓、加仓、重仓和卖出观察提醒；</li>
+<li>通过桌面通知或 SMTP 邮件发送提醒；</li>
+<li>根据中国交易日历、开盘、午休和收盘时间自动运行；</li>
+<li>在系统托盘或 macOS 菜单栏后台驻留；</li>
+<li>保存历史状态，重启后继续监控并避免短时间重复提醒。</li>
+</ol>
+<hr />
+<h2 id="2">2. 文件说明</h2>
+<h3 id="21-windows">2.1 Windows 便携版</h3>
+<p>建议把整个便携版解压到固定目录，例如：</p>
+<pre><code class="language-text">D:\KzzMonitor\
+├─ KzzMonitor.exe              主程序
+├─ 可转债监控.xlsx              配置和结果面板
+├─ KzzMonitor详细操作手册.html   离线网页手册
+├─ KzzMonitor详细操作手册.pdf    PDF 手册
+├─ install_startup.ps1         安装自动启动
+├─ uninstall_startup.ps1       取消自动启动
+├─ data\                       运行后产生的数据库和加密授权码
+└─ logs\                       运行日志
+</code></pre>
+<p>运行不需要安装 Python，也不需要安装 Python 包。不要只复制 EXE；至少要让 EXE 和 Excel 工作簿处于同一目录。</p>
+<h3 id="22-macos">2.2 macOS 版</h3>
+<p>macOS 应用首次运行后，实际数据保存在：</p>
+<pre><code class="language-text">~/Library/Application Support/KzzMonitor/
+</code></pre>
+<p>控制台的“打开监控表”会打开正确的工作簿。不要直接修改应用包内部模板。</p>
+<hr />
+<h2 id="3">3. 第一次使用</h2>
+<h3 id="31-windows">3.1 Windows</h3>
+<ol>
+<li>解压便携包到固定目录；</li>
+<li>双击 <code>KzzMonitor.exe</code>；</li>
+<li>等待控制台出现；</li>
+<li>点击“打开监控表”；</li>
+<li>在“监控列表”中维护转债和策略参数；</li>
+<li>在“设置”或控制台中设置轮询时间、安道全文件和通知；</li>
+<li>保存并关闭 Excel；</li>
+<li>回到控制台点击“立即强制新一轮”进行首次测试。</li>
+</ol>
+<h3 id="32-macos">3.2 macOS</h3>
+<ol>
+<li>按住 Control 点击 <code>KzzMonitor.app</code>；</li>
+<li>选择“打开”；</li>
+<li>确认运行未签名的本地应用；</li>
+<li>允许通知及钥匙串访问；</li>
+<li>后续步骤与 Windows 相同。</li>
+</ol>
+<hr />
+<h2 id="4">4. 控制台说明</h2>
+<h3 id="41">4.1 状态指示</h3>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>含义</th>
+<th>是否需要处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>正在检查</td>
+<td>正在读取配置、交易日历或市场状态</td>
+<td>通常无需处理</td>
+</tr>
+<tr>
+<td>监控正常</td>
+<td>当前是交易时段，正在按顺序轮询</td>
+<td>无需处理</td>
+</tr>
+<tr>
+<td>等待开市</td>
+<td>开盘前、午休、收盘后或非交易日</td>
+<td>无需处理</td>
+</tr>
+<tr>
+<td>异常重试中</td>
+<td>网络、数据源或文件访问发生错误</td>
+<td>查看运行日志</td>
+</tr>
+<tr>
+<td>已停止</td>
+<td>轮询线程已停止，控制台仍在</td>
+<td>可点击“开启轮询”</td>
+</tr>
+</tbody>
+</table>
+<h3 id="42">4.2 操作按钮</h3>
+<h4 id="_1">开启轮询</h4>
+<p>启动常规监控。程序会自动遵守交易日、开市时间、午休和收盘时间。</p>
+<h4 id="_2">结束轮询</h4>
+<p>停止轮询，但不关闭控制台。停止后不会继续获取行情，也不会发送行情提醒。</p>
+<h4 id="_3">立即强制新一轮</h4>
+<p>忽略当前是否开市，立即完整处理全部已启用转债。每只转债之间仍遵守“轮询间隔秒”。适合：</p>
+<ul>
+<li>第一次配置后测试；</li>
+<li>临时手工刷新；</li>
+<li>收盘后核对数据；</li>
+<li>检查邮件和策略配置。</li>
+</ul>
+<h4 id="_4">刷新安道全</h4>
+<p>立即读取设置的安道全文件，并按代码覆盖：</p>
+<ul>
+<li>当周评价；</li>
+<li>建仓线；</li>
+<li>加仓线；</li>
+<li>重仓线。</li>
+</ul>
+<p>必须先选择安道全文件并保存设置。</p>
+<h4 id="_5">保存设置</h4>
+<p>把控制台中的常用设置写入 Excel 的“设置”工作表。若 Excel 正在打开，Windows 可能锁定文件，应先保存并关闭 Excel。</p>
+<h4 id="_6">测试邮件</h4>
+<p>先保存 SMTP 设置，再发送测试邮件。测试成功后检查收件箱和垃圾邮件目录。</p>
+<h4 id="_7">打开监控表 / 打开日志目录</h4>
+<p>分别打开当前真正使用的 Excel 配置表和日志目录。</p>
+<h3 id="43">4.3 关闭和后台运行</h3>
+<p>点击右上角关闭按钮时：</p>
+<ul>
+<li>选择“是”：停止轮询并彻底退出；</li>
+<li>选择“否”：隐藏到托盘/菜单栏，继续后台运行；</li>
+<li>选择“取消”：返回控制台。</li>
+</ul>
+<p>托盘或菜单栏菜单可执行：显示控制台、启动、停止、强制新一轮、刷新安道全和退出。</p>
+<p>同一系统用户只能运行一个实例。第二次启动会提示已有程序运行。</p>
+<hr />
+<h2 id="5-excel">5. Excel 工作簿说明</h2>
+<p>程序写入工作簿时，Excel 应保持关闭。可以临时打开查看或修改，但查看完成后要保存并关闭。</p>
+<h3 id="51">5.1 “设置”工作表</h3>
+<table>
+<thead>
+<tr>
+<th>配置项</th>
+<th style="text-align: right;">默认值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>轮询间隔秒</td>
+<td style="text-align: right;">60</td>
+<td><strong>单只查询间隔</strong>：每查询完一支转债后的等待时间，最低 10 秒，不是整轮间隔</td>
+</tr>
+<tr>
+<td>整轮间隔分钟</td>
+<td style="text-align: right;">60</td>
+<td><strong>整轮启动间隔</strong>：按上一轮开始到下一轮开始计算；整轮超时则不额外等待</td>
+</tr>
+<tr>
+<td>开盘时间</td>
+<td style="text-align: right;">09:30</td>
+<td>上午监控开始时间</td>
+</tr>
+<tr>
+<td>午间休市开始</td>
+<td style="text-align: right;">11:30</td>
+<td>午休暂停时间</td>
+</tr>
+<tr>
+<td>午间休市结束</td>
+<td style="text-align: right;">13:00</td>
+<td>下午恢复时间</td>
+</tr>
+<tr>
+<td>收盘时间</td>
+<td style="text-align: right;">15:00</td>
+<td>盘中轮询结束时间</td>
+</tr>
+<tr>
+<td>收盘后完整更新</td>
+<td style="text-align: right;">TRUE</td>
+<td>收盘后是否再完成一轮</td>
+</tr>
+<tr>
+<td>安道全文件</td>
+<td style="text-align: right;">空</td>
+<td>安道全 Excel 完整路径</td>
+</tr>
+<tr>
+<td>安道全工作表</td>
+<td style="text-align: right;">空</td>
+<td>留空使用第一张表</td>
+</tr>
+<tr>
+<td>桌面通知</td>
+<td style="text-align: right;">TRUE</td>
+<td>是否显示系统通知</td>
+</tr>
+<tr>
+<td>邮件通知</td>
+<td style="text-align: right;">FALSE</td>
+<td>是否发送邮件提醒</td>
+</tr>
+<tr>
+<td>邮件收件人</td>
+<td style="text-align: right;">空</td>
+<td>多个地址使用英文逗号分隔</td>
+</tr>
+<tr>
+<td>SMTP服务器</td>
+<td style="text-align: right;">空</td>
+<td>例如 smtp.qq.com</td>
+</tr>
+<tr>
+<td>SMTP端口</td>
+<td style="text-align: right;">465</td>
+<td>SSL 常用 465，STARTTLS 常用 587</td>
+</tr>
+<tr>
+<td>SMTP用户名</td>
+<td style="text-align: right;">空</td>
+<td>通常是完整邮箱地址</td>
+</tr>
+<tr>
+<td>SMTP发件人</td>
+<td style="text-align: right;">空</td>
+<td>通常与用户名相同</td>
+</tr>
+<tr>
+<td>SMTP使用SSL</td>
+<td style="text-align: right;">TRUE</td>
+<td>465 通常开启；587 通常关闭</td>
+</tr>
+<tr>
+<td>邮件冷却分钟</td>
+<td style="text-align: right;">30</td>
+<td>保留设置；提醒另有事件去重机制</td>
+</tr>
+<tr>
+<td>日志保留天数</td>
+<td style="text-align: right;">30</td>
+<td>日志滚动保留期限</td>
+</tr>
+<tr>
+<td>更新清单地址</td>
+<td style="text-align: right;">空</td>
+<td>管理员提供的 HTTPS、file://、本地或共享目录 update-manifest.json 地址</td>
+</tr>
+<tr>
+<td>启动时检查更新</td>
+<td style="text-align: right;">TRUE</td>
+<td>地址不为空时，启动后自动检查一次；不会未经确认自动安装</td>
+</tr>
+</tbody>
+</table>
+<h3 id="52">5.2 “监控列表”工作表</h3>
+<h4 id="_8">需要用户维护的列</h4>
+<table>
+<thead>
+<tr>
+<th>列</th>
+<th>必填</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>启用</td>
+<td>是</td>
+<td>TRUE 监控；FALSE 停用</td>
+</tr>
+<tr>
+<td>转债代码</td>
+<td>是</td>
+<td>六位代码，如 113043</td>
+</tr>
+<tr>
+<td>名称</td>
+<td>否</td>
+<td>可由行情自动补充</td>
+</tr>
+<tr>
+<td>卖出观察价</td>
+<td>是</td>
+<td>峰值达到该价位后才武装卖出观察</td>
+</tr>
+<tr>
+<td>回撤提醒%</td>
+<td>是</td>
+<td>从监控峰值回撤达到此比例后检查提醒</td>
+</tr>
+<tr>
+<td>趋势窗口</td>
+<td>是</td>
+<td>使用最近几次采样判断方向，建议 3–5</td>
+</tr>
+<tr>
+<td>趋势最小跌幅</td>
+<td>是</td>
+<td>窗口首尾至少下降该绝对价格才判下降</td>
+</tr>
+<tr>
+<td>建仓线</td>
+<td>否</td>
+<td>现价小于等于此值进入建仓区</td>
+</tr>
+<tr>
+<td>加仓线</td>
+<td>否</td>
+<td>现价小于等于此值进入加仓区</td>
+</tr>
+<tr>
+<td>重仓线</td>
+<td>否</td>
+<td>现价小于等于此值进入重仓区</td>
+</tr>
+<tr>
+<td>当周评价</td>
+<td>否</td>
+<td>可手工填写或从安道全导入</td>
+</tr>
+</tbody>
+</table>
+<h4 id="_9">程序自动维护的列</h4>
+<p>当前价、趋势、近一年最高价、监控峰值、回撤%、仓位区域、强赎状态、最近更新和运行说明无需手工填写。</p>
+<p>已退市或停止交易的转债会显示“无实时行情”。建议把“启用”设为 FALSE，但不要急于删除，便于保留历史记录。</p>
+<h3 id="53">5.3 “提醒记录”工作表</h3>
+<p>记录提醒时间、代码、名称、提醒类型、价格和消息。它用于回顾，不代表邮件一定送达；邮件送达情况还需查看日志和邮箱。</p>
+<h3 id="54">5.4 “使用说明”和“参数说明”工作表</h3>
+<p>内置精简操作指南、常见问题和参数解释，方便不打开外部手册时快速查看。</p>
+<hr />
+<h2 id="6">6. 两种轮询间隔</h2>
+<p>程序有两个不同层级的间隔，不能混淆。</p>
+<h3 id="61">6.1 轮询间隔秒：每查询一支转债的间隔</h3>
+<p>“轮询间隔秒”是<strong>每查询完一支转债后，到查询下一支转债前的等待时间</strong>，不是所有转债整体刷新周期。</p>
+<p>例如启用 14 只转债，单只查询间隔设为 60 秒，忽略接口耗时，完成一整轮约需：</p>
+<pre><code class="language-text">(14 - 1) × 60 秒 ≈ 13 分钟
+</code></pre>
+<p>最后一支完成后不再计一次单只等待，而是由“整轮间隔分钟”决定下一轮何时开始。</p>
+<h3 id="62">6.2 整轮间隔分钟：两轮启动之间的间隔</h3>
+<p>“整轮间隔分钟”按<strong>本轮开始时间到下一轮开始时间</strong>计算，不是“本轮完成后再等待这么久”。</p>
+<p>例一：</p>
+<ul>
+<li>整轮间隔设为 60 分钟；</li>
+<li>第一轮 10:00 开始；</li>
+<li>第一轮 10:15 完成；</li>
+<li>程序再等待约 45 分钟；</li>
+<li>下一轮目标在 11:00 开始。</li>
+</ul>
+<p>例二：监控数量很多：</p>
+<ul>
+<li>整轮间隔设为 60 分钟；</li>
+<li>第一轮 10:00 开始；</li>
+<li>第一轮直到 11:10 才完成，耗时 70 分钟；</li>
+<li>因为整轮耗时已经超过 60 分钟，整轮间隔不再产生额外等待；</li>
+<li>若当时仍处于允许的交易时段，程序直接开始下一轮；若已进入午休或收盘，则等待恢复交易。</li>
+</ul>
+<p>可以概括为：</p>
+<pre><code class="language-text">额外等待时间 = max(0, 整轮间隔 - 本轮实际耗时)
+</code></pre>
+<p>“立即强制新一轮”会打断整轮等待并马上启动一轮；这次强制轮询的开始时间会成为下一次整轮间隔的计算起点。</p>
+<p>建议：</p>
+<ul>
+<li>单只查询间隔：10–20 只可设 30–60 秒，20–50 只可设 60–120 秒；</li>
+<li>整轮间隔：低频监控可设 30–60 分钟；</li>
+<li>不建议把单只间隔设置过低，以免增加数据源压力和限流风险。</li>
+</ul>
+<hr />
+<h2 id="7">7. 趋势与卖出提醒逻辑</h2>
+<h3 id="71">7.1 趋势</h3>
+<p>程序读取最近“趋势窗口”次价格：</p>
+<ul>
+<li>首尾上涨达到“趋势最小跌幅”，且上涨步数不少于下降步数：上升；</li>
+<li>首尾下降达到阈值，且下降步数不少于上涨步数：下降；</li>
+<li>其他情况：震荡；</li>
+<li>数据不足：未知。</li>
+</ul>
+<p>“趋势最小跌幅”虽保留旧名称，但实际同时作为上涨和下跌的最小绝对变化阈值。</p>
+<h3 id="72">7.2 卖出观察</h3>
+<p>需要同时满足：</p>
+<ol>
+<li>程序记录到的监控峰值达到“卖出观察价”；</li>
+<li>当前趋势为下降；</li>
+<li>从监控峰值计算的回撤达到“回撤提醒%”。</li>
+</ol>
+<p>回撤计算：</p>
+<pre><code class="language-text">回撤% = (监控峰值 - 当前价) ÷ 监控峰值 × 100%
+</code></pre>
+<p>例如峰值 150，现价 141，回撤为 6%。若观察价为 130、回撤阈值为 5%，且趋势为下降，则触发卖出观察提醒。</p>
+<p>同一轮下跌只提醒一次。回撤恢复到阈值的 40% 以下后解除锁定，下一次满足条件可以再次提醒。</p>
+<blockquote>
+<p>这是“观察提醒”，不是自动交易指令。</p>
+</blockquote>
+<h3 id="73">7.3 三段线</h3>
+<p>按价格从高到低通常应满足：</p>
+<pre><code class="language-text">建仓线 ≥ 加仓线 ≥ 重仓线
+</code></pre>
+<p>价格向下进入更深区域时提醒一次；从深区域反弹到浅区域不会发送新的建仓提醒。</p>
+<hr />
+<h2 id="8">8. 安道全数据导入</h2>
+<p>源工作表前 50 行内必须能找到：</p>
+<ul>
+<li>代码；</li>
+<li>建仓线；</li>
+<li>加仓线；</li>
+<li>重仓线；</li>
+<li>当周评价、当周评级或评级（三者之一）。</li>
+</ul>
+<p>代码会去除 <code>SH</code>、<code>SZ</code> 前缀并统一为六位。<code>-</code> 会视为空值或零值处理。</p>
+<p>建议每周拿到新文件后：</p>
+<ol>
+<li>在控制台选择新文件；</li>
+<li>点击“保存设置”；</li>
+<li>点击“刷新安道全”；</li>
+<li>查看日志中的更新数量；</li>
+<li>打开监控表抽查几只转债。</li>
+</ol>
+<hr />
+<h2 id="9">9. 邮件提醒设置</h2>
+<h3 id="91">9.1 通用参数</h3>
+<ul>
+<li>开启“邮件通知”；</li>
+<li>填写收件人；</li>
+<li>填写 SMTP 服务器、端口、用户名、发件人和授权码；</li>
+<li>选择 SSL；</li>
+<li>保存设置；</li>
+<li>点击“测试邮件”。</li>
+</ul>
+<p>授权码不是邮箱网页登录密码，应在邮箱后台开启 SMTP 后单独生成。</p>
+<h3 id="92">9.2 常见邮箱示例</h3>
+<table>
+<thead>
+<tr>
+<th>邮箱</th>
+<th>服务器</th>
+<th style="text-align: right;">端口</th>
+<th>SSL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QQ 邮箱</td>
+<td>smtp.qq.com</td>
+<td style="text-align: right;">465</td>
+<td>开启</td>
+</tr>
+<tr>
+<td>163 邮箱</td>
+<td>smtp.163.com</td>
+<td style="text-align: right;">465</td>
+<td>开启</td>
+</tr>
+<tr>
+<td>Outlook</td>
+<td>smtp.office365.com</td>
+<td style="text-align: right;">587</td>
+<td>关闭（STARTTLS）</td>
+</tr>
+<tr>
+<td>Gmail</td>
+<td>smtp.gmail.com</td>
+<td style="text-align: right;">465</td>
+<td>开启</td>
+</tr>
+</tbody>
+</table>
+<p>邮箱服务商可能调整设置，以其官方说明为准。Gmail、Outlook 等可能要求应用专用密码或组织管理员许可。</p>
+<h3 id="93">9.3 授权码安全</h3>
+<ul>
+<li>Windows：使用当前用户 DPAPI 加密，保存在 <code>data/smtp_secret.bin</code>；</li>
+<li>macOS：保存在登录钥匙串，服务名为 <code>KzzMonitor SMTP</code>；</li>
+<li>换电脑或换系统用户后必须重新输入；</li>
+<li>不要把授权码写进 Excel、手册或截图。</li>
+</ul>
+<hr />
+<h2 id="10">10. 自动启动</h2>
+<h3 id="101-windows">10.1 Windows</h3>
+<p>在最终使用目录中运行 <code>install_startup.ps1</code>，创建：</p>
+<ul>
+<li>登录时启动；</li>
+<li>每天 09:20 启动；</li>
+<li>重复启动由全局单实例锁拦截。</li>
+</ul>
+<p>如果 PowerShell 阻止脚本，可右键选择“使用 PowerShell 运行”，或按组织安全策略处理。取消时运行 <code>uninstall_startup.ps1</code>。</p>
+<p>移动程序目录后应先取消，再重新安装自动启动。</p>
+<h3 id="102-macos">10.2 macOS</h3>
+<p>运行：</p>
+<pre><code class="language-text">chmod +x install_macos_startup.sh uninstall_macos_startup.sh
+./install_macos_startup.sh
+</code></pre>
+<p>取消：</p>
+<pre><code class="language-text">./uninstall_macos_startup.sh
+</code></pre>
+<hr />
+<h2 id="11">11. 交易时间行为</h2>
+<p>默认按北京时间：</p>
+<ul>
+<li>09:30–11:30：轮询；</li>
+<li>11:30–13:00：暂停；</li>
+<li>13:00–15:00：轮询；</li>
+<li>15:00 后：根据设置执行最后一轮，然后等待下一天；</li>
+<li>非交易日：等待下一天。</li>
+</ul>
+<p>若交易日历接口失败，程序进入“异常重试中”，而不是仅凭星期误判开市。</p>
+<hr />
+<h2 id="12">12. 日志与故障排查</h2>
+<h3 id="121">12.1 首先查看哪里</h3>
+<p>控制台底部显示实时日志。完整日志位于 <code>logs/kzz_monitor.log</code>。</p>
+<h3 id="122">12.2 常见问题</h3>
+<h4 id="excel">Excel 无法写入</h4>
+<p>原因通常是工作簿正在 Excel 中打开。此时监控和通知仍会继续，未写内容会持久化保存到数据库的“Excel 待写队列”：</p>
+<ul>
+<li>每只转债的普通行情结果只保留最新一条，避免工作簿长时间打开时累积大量过时快照；</li>
+<li>提醒记录逐条保留，不会因为后续行情覆盖而丢失；</li>
+<li>即使退出或重启程序，待写队列也仍然存在；</li>
+<li>保存并关闭 Excel 后，程序会在下一次处理转债前自动补写；</li>
+<li>日志出现“Excel 待写队列补写完成”表示已经清空。</li>
+</ul>
+<p>因此无需为了查看 Excel 而停止监控，但建议查看后及时关闭，避免面板长时间不更新。</p>
+<h4 id="_10">行情接口未返回某代码</h4>
+<p>程序会检查最后交易日。若历史最后交易日明显早于今天，会标记“可能已退市/停止交易”，而不是当成系统故障。建议停用该行。</p>
+<h4 id="_11">异常重试中</h4>
+<p>可能是网络不可用、数据源限流、第三方接口字段变化或安道全路径失效。先查看日志中的最后一个异常。</p>
+<h4 id="_12">邮件测试失败</h4>
+<p>检查服务器、端口、SSL、用户名、发件人、授权码和收件人；确认邮箱已开启 SMTP；检查防火墙和公司网络限制。</p>
+<h4 id="_13">双击没有新窗口</h4>
+<p>可能已有实例在托盘/菜单栏运行。展开隐藏图标并双击 <code>KZZ</code>。全局单实例锁会阻止重复运行。</p>
+<h4 id="windows">Windows 安全软件提示</h4>
+<p>PyInstaller 单文件程序会在临时目录解压运行，部分安全软件可能需要扫描或加入信任。只使用自己构建或可信来源的版本。</p>
+<h4 id="macos">macOS 阻止打开</h4>
+<p>按住 Control 点击应用并选择“打开”。正式跨机器分发应使用 Apple Developer ID 签名和公证。</p>
+<hr />
+<h2 id="13">13. 数据备份与迁移</h2>
+<p>建议定期备份：</p>
+<ul>
+<li><code>可转债监控.xlsx</code>；</li>
+<li><code>data/monitor.db</code>；</li>
+<li>必要时保留 <code>logs</code>。</li>
+</ul>
+<p>迁移时先彻底退出程序，再复制文件。SMTP 授权码受操作系统当前用户保护，迁移后需要重新输入。</p>
+<p>如果删除 <code>monitor.db</code>：</p>
+<ul>
+<li>监控峰值、短期趋势历史、提醒锁定和缓存会重置；</li>
+<li>Excel 中的配置不会丢失；</li>
+<li>可能导致原本已提醒的条件再次提醒。</li>
+</ul>
+<hr />
+<h2 id="14">14. 推荐配置流程</h2>
+<ol>
+<li>先只启用 2–3 只有实时行情的转债；</li>
+<li>设置 60 秒间隔；</li>
+<li>暂时只开启桌面通知；</li>
+<li>强制运行一轮，确认 Excel 更新；</li>
+<li>导入安道全并抽查三段线；</li>
+<li>配置并测试邮件；</li>
+<li>再逐步启用完整列表；</li>
+<li>稳定运行一到两个交易日后安装自动启动。</li>
+</ol>
+<hr />
+<h2 id="15">15. 版本更新注意事项</h2>
+<p>更新 EXE 或 <code>.app</code> 前：</p>
+<ol>
+<li>从托盘/菜单栏彻底退出旧程序；</li>
+<li>备份 Excel 和 data；</li>
+<li>替换程序文件，不要覆盖自己已经配置好的 Excel，除非明确需要新模板；</li>
+<li>启动新版本并执行一次强制轮询；</li>
+<li>查看控制台日志。</li>
+</ol>
+<h3 id="151">15.1 在线更新（推荐）</h3>
+<p>配置“更新清单地址”后，程序可以在线检查和一键更新。更新过程：</p>
+<ol>
+<li>读取 <code>update-manifest.json</code>；</li>
+<li>比较当前版本和发布版本；</li>
+<li>用户确认后下载对应 Windows/macOS 更新包；</li>
+<li>校验 SHA-256，校验失败绝不安装；</li>
+<li>自动退出当前程序；</li>
+<li>替换程序和手册；</li>
+<li>自动重新启动。</li>
+</ol>
+<p>在线更新<strong>不会覆盖</strong>：</p>
+<ul>
+<li><code>可转债监控.xlsx</code>；</li>
+<li><code>data/monitor.db</code>；</li>
+<li>SMTP 加密授权码或 macOS 钥匙串；</li>
+<li><code>logs</code>；</li>
+<li>用户已有的监控参数和提醒记录。</li>
+</ul>
+<p>新版本需要增加 Excel 配置项或帮助页时，会在首次启动时执行原地迁移：只补充缺少的字段，不覆盖已有值和监控列表。因此日常更新不需要重新发送 Excel。</p>
+<h3 id="152-windows">15.2 发布者如何发布 Windows 更新</h3>
+<p>在开发工程完成构建后运行：</p>
+<pre><code class="language-text">.venv-build\Scripts\python.exe make_windows_update.py --base-url https://你的地址/kzz-updates --notes &quot;本次更新说明&quot;
+</code></pre>
+<p>会在 <code>updates</code> 目录生成：</p>
+<pre><code class="language-text">update-manifest.json
+KzzMonitor-update-v版本-windows-x64.zip
+</code></pre>
+<p>更新 ZIP 只包含程序和手册，不包含 Excel。把这两个文件上传到同一个 HTTPS 目录，然后只需最初一次让使用者在控制台填写清单 URL。例如：</p>
+<pre><code class="language-text">https://你的地址/kzz-updates/update-manifest.json
+</code></pre>
+<p>以后发布新版本时覆盖清单并上传新的版本 ZIP 即可，使用者不再需要接收完整便携包。</p>
+<p>也可以把两个文件放在所有人可访问的公司共享目录，清单地址填写 UNC 路径，例如：</p>
+<pre><code class="language-text">\\server\share\kzz-updates\update-manifest.json
+</code></pre>
+<p>若使用 GitHub，可把更新包放到 Release，把清单中的包 URL 写成 Release 下载地址，再把清单放到一个稳定的 Raw URL。GitHub 私有仓库需要身份认证，当前简易更新器不接收 GitHub Token，建议使用公开发布页或受控的内部 HTTPS/共享目录。</p>
+<p>工程已附带 GitHub Actions 工作流 <code>release-windows.yml</code>。将工程放入公开 GitHub 仓库并推送版本标签（例如 <code>v1.2.0</code>）后，它会自动构建、测试并发布完整便携包、增量更新包和清单。使用者只需最初设置一次稳定地址：</p>
+<pre><code class="language-text">https://github.com/你的用户名/你的仓库/releases/latest/download/update-manifest.json
+</code></pre>
+<h3 id="153">15.3 “热更新”的边界</h3>
+<p>配置、监控列表、安道全数据和通知参数可以在运行中重新读取；但 EXE 或 <code>.app</code> 的代码不能在进程运行时直接替换，因此安装程序更新时会自动重启一次。这属于一键在线更新，而不是完全无重启的代码热替换。</p>
+<hr />
+<h2 id="16">16. 快速检查清单</h2>
+<ul>
+<li>[ ] 监控列表代码正确且仍有实时行情；</li>
+<li>[ ] 需要监控的行“启用”为 TRUE；</li>
+<li>[ ] 已区分“单只查询间隔”和“整轮启动间隔”；</li>
+<li>[ ] 卖出观察价和回撤比例符合个人规则；</li>
+<li>[ ] 建仓线 ≥ 加仓线 ≥ 重仓线；</li>
+<li>[ ] 安道全路径有效；</li>
+<li>[ ] Excel 已保存并关闭；</li>
+<li>[ ] 控制台状态为“监控正常”或合理的“等待开市”；</li>
+<li>[ ] 测试邮件成功；</li>
+<li>[ ] 托盘/菜单栏图标可呼出控制台；</li>
+<li>[ ] 自动启动在最终目录安装；</li>
+<li>[ ] 已备份 Excel 和数据库。</li>
+</ul></main></body></html>

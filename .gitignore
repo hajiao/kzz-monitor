@@ -1,0 +1,44 @@
+# Python environments and caches
+.venv*/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+
+# Build outputs and local tools
+build/
+build-*/
+dist/
+dist-*/
+release/
+release-*/
+updates/
+.tools/
+*.spec
+*.zip
+*.exe
+*.app/
+
+# User data — never publish
+*.xlsx
+*.xlsm
+*.xls
+*.bak
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.lock
+smtp_secret.bin
+exe-self-test.txt
+data-self-test.txt
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated local documents
+manual.pdf

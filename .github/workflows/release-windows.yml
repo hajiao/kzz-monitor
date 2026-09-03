@@ -1,0 +1,42 @@
+name: Release Windows update
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install, test and build
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install '.[build,test]'
+          python -m pytest -q
+          python generate_template.py
+          pyinstaller --noconfirm --clean --onefile --noconsole --name KzzMonitor --collect-all akshare --collect-all py_mini_racer --collect-all pystray --collect-all winotify --hidden-import openpyxl launcher.py
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item dist/KzzMonitor.exe release/KzzMonitor.exe -Force
+          Copy-Item README.md,KzzMonitor详细操作手册.md,KzzMonitor详细操作手册.html,KzzMonitor详细操作手册.pdf release/ -Force
+      - name: Build incremental and first-install packages
+        shell: pwsh
+        run: |
+          python make_windows_update.py --base-url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}" --notes "KzzMonitor ${{ github.ref_name }}"
+          Compress-Archive -Path release/KzzMonitor.exe,可转债监控.xlsx,release/README.md,release/KzzMonitor详细操作手册.md,release/KzzMonitor详细操作手册.html,release/KzzMonitor详细操作手册.pdf,install_startup.ps1,uninstall_startup.ps1 -DestinationPath KzzMonitor-Windows便携版.zip -Force
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            updates/update-manifest.json
+            updates/KzzMonitor-update-*-windows-x64.zip
+            KzzMonitor-Windows便携版.zip
+          generate_release_notes: true
