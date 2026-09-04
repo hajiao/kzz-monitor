@@ -67,6 +67,7 @@ class MonitorApp:
         self.monitor_refresh_in_progress = False
         self.monitor_rows_by_code: dict[str, dict[str, Any]] = {}
         self.search_labels: dict[str, str] = {}
+        self.search_edit_text = ""
         self.pending_excel_count = 0
         self.last_cycle_text = "尚无记录"
         self.only_alerts_var = tk.BooleanVar(value=False)
@@ -250,6 +251,8 @@ class MonitorApp:
         )
         self.bond_search_combo.pack(side="left", fill="x", expand=True)
         self.bond_search_combo.bind("<KeyRelease>", self._update_bond_search_suggestions)
+        self.bond_search_combo.bind("<Up>", self._return_to_search_edit)
+        self.bond_search_combo.bind("<Escape>", self._return_to_search_edit)
         self.bond_search_combo.bind("<<ComboboxSelected>>", self._select_bond_search_result)
         self.bond_search_combo.bind("<Return>", self._select_bond_search_result)
         ttk.Label(search_line, text="输入部分代码或名称，选择后自动回填").pack(side="left", padx=(8, 0))
@@ -462,7 +465,13 @@ class MonitorApp:
         self.bond_search_combo.configure(values=list(self.search_labels))
 
     def _update_bond_search_suggestions(self, _event: object = None) -> None:
+        if _event is not None and getattr(_event, "keysym", "") in {
+            "Down", "Up", "Return", "Escape", "Tab", "Shift_L", "Shift_R",
+            "Control_L", "Control_R", "Alt_L", "Alt_R",
+        }:
+            return
         query = self.bond_search_var.get()
+        self.search_edit_text = query
         rows = list(self.monitor_rows_by_code.values())
         matches = match_bond_rows(query, rows)
         labels = [
@@ -470,8 +479,17 @@ class MonitorApp:
             for row in matches
         ]
         self.bond_search_combo.configure(values=labels)
-        if query.strip() and labels:
-            self.bond_search_combo.event_generate("<Down>")
+
+    def _return_to_search_edit(self, _event: object = None) -> str:
+        try:
+            self.root.tk.call("ttk::combobox::Unpost", str(self.bond_search_combo))
+        except tk.TclError:
+            pass
+        self.bond_search_var.set(self.search_edit_text)
+        self.bond_search_combo.focus_set()
+        self.bond_search_combo.icursor("end")
+        self.bond_search_combo.selection_clear()
+        return "break"
 
     def _select_bond_search_result(self, _event: object = None) -> None:
         query = self.bond_search_var.get().strip()
@@ -487,6 +505,8 @@ class MonitorApp:
         if source is not None:
             self._fill_bond_form(source)
             self._select_tree_code(str(source.get("转债代码") or ""))
+            self.bond_search_combo.focus_set()
+            self.bond_search_combo.icursor("end")
 
     def _lookup_from_editor(self, field: str) -> None:
         query = str(self.bond_vars[field].get()).strip()
