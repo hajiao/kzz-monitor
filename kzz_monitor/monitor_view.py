@@ -11,6 +11,29 @@ class VisualState:
     is_alert: bool
 
 
+def match_bond_rows(query: str, rows: list[dict[str, Any]], limit: int = 20) -> list[dict[str, Any]]:
+    """按精确、前缀、包含顺序模糊匹配转债代码或名称。"""
+    needle = query.strip().casefold().replace(" ", "")
+    if not needle:
+        return rows[:limit]
+    ranked: list[tuple[int, int, dict[str, Any]]] = []
+    for index, row in enumerate(rows):
+        code = str(row.get("转债代码") or "").strip().casefold().replace(" ", "")
+        name = str(row.get("名称") or "").strip().casefold().replace(" ", "")
+        fields = (code, name)
+        if needle in fields:
+            rank = 0
+        elif any(value.startswith(needle) for value in fields):
+            rank = 1
+        elif any(needle in value for value in fields):
+            rank = 2
+        else:
+            continue
+        ranked.append((rank, index, row))
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    return [row for _, _, row in ranked[:limit]]
+
+
 def _number(value: Any) -> float | None:
     try:
         if value in (None, "", "-"):

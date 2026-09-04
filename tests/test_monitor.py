@@ -12,7 +12,7 @@ from kzz_monitor.config import AppSettings, BondConfig, normalize_code
 from kzz_monitor.config import create_workbook, load_configuration, migrate_workbook
 from kzz_monitor.excel_store import ExcelStore
 from kzz_monitor.models import Evaluation, Quote, Trend
-from kzz_monitor.monitor_view import classify_bond_row
+from kzz_monitor.monitor_view import classify_bond_row, match_bond_rows
 from kzz_monitor.provider import exchange_symbol
 from kzz_monitor.service import AlertEngine, MonitorService
 from kzz_monitor.storage import StateStore
@@ -292,6 +292,20 @@ def test_monitor_visual_alert_priority_and_contrast_states():
     assert classify_bond_row({**base, "趋势": "无实时行情"}).key == "unavailable"
     assert classify_bond_row({"趋势": "震荡", "强赎状态": "未开始"}).key == "normal"
     assert classify_bond_row({"趋势": "震荡"}, sell_latched=True).key == "sell"
+
+
+def test_bond_fuzzy_search_by_code_and_name_with_ranking():
+    rows = [
+        {"转债代码": "113043", "名称": "财通转债"},
+        {"转债代码": "113056", "名称": "重银转债"},
+        {"转债代码": "127049", "名称": "希望转2"},
+        {"转债代码": "123119", "名称": "康泰转2"},
+    ]
+    assert [row["转债代码"] for row in match_bond_rows("113", rows)] == ["113043", "113056"]
+    assert [row["转债代码"] for row in match_bond_rows("财通", rows)] == ["113043"]
+    assert [row["转债代码"] for row in match_bond_rows("转2", rows)] == ["127049", "123119"]
+    assert [row["转债代码"] for row in match_bond_rows(" 113043 ", rows)] == ["113043"]
+    assert match_bond_rows("不存在", rows) == []
 
 
 def test_windows_update_replacer_has_retry_restart_and_log(tmp_path, monkeypatch):

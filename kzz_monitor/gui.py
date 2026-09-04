@@ -18,7 +18,7 @@ from . import __version__
 from .clock import china_now
 from .config import load_configuration, update_settings
 from .excel_store import ExcelStore
-from .monitor_view import classify_bond_row
+from .monitor_view import classify_bond_row, match_bond_rows
 from .notifier import Notifier
 from .platform_utils import open_path
 from .secrets import load_secret, save_secret
@@ -65,6 +65,7 @@ class MonitorApp:
         self.monitor_refresh_job: str | None = None
         self.monitor_refresh_in_progress = False
         self.monitor_rows_by_code: dict[str, dict[str, Any]] = {}
+        self.search_labels: dict[str, str] = {}
         self.only_alerts_var = tk.BooleanVar(value=False)
         self.update_check_job: str | None = None
         self.update_check_in_progress = False
@@ -237,6 +238,18 @@ class MonitorApp:
 
         editor = ttk.LabelFrame(parent, text="新增或修改监控转债", padding=8)
         editor.pack(fill="x", pady=(8, 0))
+        search_line = ttk.Frame(editor)
+        search_line.grid(row=0, column=0, columnspan=8, sticky="ew", pady=(0, 7))
+        ttk.Label(search_line, text="快速查找（代码/名称）").pack(side="left", padx=(0, 6))
+        self.bond_search_var = tk.StringVar()
+        self.bond_search_combo = ttk.Combobox(
+            search_line, textvariable=self.bond_search_var, state="normal", width=42
+        )
+        self.bond_search_combo.pack(side="left", fill="x", expand=True)
+        self.bond_search_combo.bind("<KeyRelease>", self._update_bond_search_suggestions)
+        self.bond_search_combo.bind("<<ComboboxSelected>>", self._select_bond_search_result)
+        self.bond_search_combo.bind("<Return>", self._select_bond_search_result)
+        ttk.Label(search_line, text="输入部分代码或名称，选择后自动回填").pack(side="left", padx=(8, 0))
         fields = (
             ("启用", "启用", "check"), ("转债代码", "转债代码", "entry"),
             ("名称", "名称", "entry"), ("卖出观察价", "卖出观察价", "entry"),
@@ -246,7 +259,8 @@ class MonitorApp:
             ("当周评价", "当周评价", "entry"),
         )
         for index, (key, label, kind) in enumerate(fields):
-            row, pair = divmod(index, 4)
+            field_row, pair = divmod(index, 4)
+            row = field_row + 1
             column = pair * 2
             ttk.Label(editor, text=label).grid(row=row, column=column, sticky="w", padx=(0, 4), pady=3)
             variable: tk.Variable = tk.BooleanVar(value=True) if kind == "check" else tk.StringVar()
@@ -258,7 +272,7 @@ class MonitorApp:
         for column in (1, 3, 5, 7):
             editor.columnconfigure(column, weight=1)
         buttons = ttk.Frame(editor)
-        buttons.grid(row=3, column=0, columnspan=8, sticky="ew", pady=(7, 0))
+        buttons.grid(row=4, column=0, columnspan=8, sticky="ew", pady=(7, 0))
         ttk.Button(buttons, text="新增/保存", command=self.save_bond).pack(side="left")
         ttk.Button(buttons, text="删除选中", command=self.delete_selected_bond).pack(side="left", padx=6)
         ttk.Button(buttons, text="清空表单", command=self.clear_bond_form).pack(side="left", padx=6)
@@ -267,6 +281,17 @@ class MonitorApp:
         self.monitor_message = ttk.Label(buttons, text="", foreground="#9a6700")
         self.monitor_message.pack(side="right")
         self.clear_bond_form()
+
+        for key in ("转债代码", "名称"):
+            widget_name = None
+            # Entry widgets are found by their Tk variable, avoiding a duplicate widget registry.
+            for widget in editor.winfo_children():
+                if isinstance(widget, ttk.Entry) and str(widget.cget("textvariable")) == str(self.bond_vars[key]):
+                    widget_name = widget
+                    break
+            if widget_name is not None:
+                widget_name.bind("<Return>", lambda _event, field=key: self._lookup_from_editor(field))
+                widget_name.bind("<FocusOut>", lambda _event, field=key: self._lookup_from_editor(field))
 
     @staticmethod
     def _display_cell(value: Any) -> str:
@@ -315,6 +340,7 @@ class MonitorApp:
             self.monitor_rows_by_code = {
                 str(row.get("转债代码") or ""): row for row in reversed(rows)
             }
+            self._refresh_search_choices(rows)
             for item in self.monitor_tree.get_children():
                 self.monitor_tree.delete(item)
             counts: dict[str, int] = {}
@@ -383,12 +409,79 @@ class MonitorApp:
         source = self.monitor_rows_by_code.get(str(row.get("转债代码") or ""))
         if source is None:
             return
+        self._fill_bond_form(source)
+
+    def _fill_bond_form(self, source: dict[str, Any]) -> None:
         for key, variable in self.bond_vars.items():
             value = source.get(key)
             if isinstance(variable, tk.BooleanVar):
                 variable.set(bool(value))
             else:
                 variable.set("" if value is None else value)
+        code = str(source.get("转债代码") or "")
+        name = str(source.get("名称") or "")
+        self.bond_search_var.set(f"{code} | {name}".rstrip(" |"))
+
+    def _refresh_search_choices(self, rows: list[dict[str, Any]]) -> None:
+        self.search_labels = {}
+        for row in rows:
+            code = str(row.get("转债代码") or "").strip()
+            name = str(row.get("名称") or "").strip()
+            label = f"{code} | {name}".rstrip(" |")
+            self.search_labels[label] = code
+        self.bond_search_combo.configure(values=list(self.search_labels))
+
+    def _update_bond_search_suggestions(self, _event: object = None) -> None:
+        query = self.bond_search_var.get()
+        rows = list(self.monitor_rows_by_code.values())
+        matches = match_bond_rows(query, rows)
+        labels = [
+            f"{str(row.get('转债代码') or '').strip()} | {str(row.get('名称') or '').strip()}".rstrip(" |")
+            for row in matches
+        ]
+        self.bond_search_combo.configure(values=labels)
+        if query.strip() and labels:
+            self.bond_search_combo.event_generate("<Down>")
+
+    def _select_bond_search_result(self, _event: object = None) -> None:
+        query = self.bond_search_var.get().strip()
+        code = self.search_labels.get(query)
+        source = self.monitor_rows_by_code.get(code or "")
+        if source is None:
+            matches = match_bond_rows(query, list(self.monitor_rows_by_code.values()))
+            if len(matches) == 1:
+                source = matches[0]
+            elif len(matches) > 1:
+                self.monitor_message.configure(text=f"找到 {len(matches)} 条匹配，请从下拉列表选择")
+                return
+        if source is not None:
+            self._fill_bond_form(source)
+            self._select_tree_code(str(source.get("转债代码") or ""))
+
+    def _lookup_from_editor(self, field: str) -> None:
+        query = str(self.bond_vars[field].get()).strip()
+        if not query:
+            return
+        matches = match_bond_rows(query, list(self.monitor_rows_by_code.values()))
+        if len(matches) == 1:
+            self._fill_bond_form(matches[0])
+            self._select_tree_code(str(matches[0].get("转债代码") or ""))
+            self.monitor_message.configure(text="已匹配现有转债并回填当前设置")
+        elif len(matches) > 1:
+            self.bond_search_var.set(query)
+            self._update_bond_search_suggestions()
+            self.monitor_message.configure(text=f"输入匹配到 {len(matches)} 只，请使用快速查找下拉选择")
+
+    def _select_tree_code(self, code: str) -> None:
+        columns = list(self.monitor_tree["columns"])
+        code_index = columns.index("转债代码")
+        for item in self.monitor_tree.get_children():
+            values = self.monitor_tree.item(item, "values")
+            if len(values) > code_index and str(values[code_index]) == code:
+                self.monitor_tree.selection_set(item)
+                self.monitor_tree.focus(item)
+                self.monitor_tree.see(item)
+                return
 
     def clear_bond_form(self) -> None:
         defaults: dict[str, Any] = {
@@ -398,6 +491,8 @@ class MonitorApp:
         }
         for key, value in defaults.items():
             self.bond_vars[key].set(value)
+        if hasattr(self, "bond_search_var"):
+            self.bond_search_var.set("")
         if hasattr(self, "monitor_tree"):
             self.monitor_tree.selection_remove(self.monitor_tree.selection())
 
