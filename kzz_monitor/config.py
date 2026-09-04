@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
@@ -9,13 +10,16 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from .models import BondConfig
+from .file_locks import synchronized_path
+
+logger = logging.getLogger(__name__)
 
 SETTINGS_SHEET = "设置"
 BONDS_SHEET = "监控列表"
 ALERTS_SHEET = "提醒记录"
 GUIDE_SHEET = "使用说明"
 PARAMETERS_SHEET = "参数说明"
-WORKBOOK_SCHEMA_VERSION = "1.1.5"
+WORKBOOK_SCHEMA_VERSION = "1.2.0"
 DEFAULT_UPDATE_MANIFEST_URL = (
     "https://github.com/hajiao/kzz-monitor/releases/latest/download/update-manifest.json"
 )
@@ -63,6 +67,9 @@ GUIDE_ROWS = [
     ("7. 后台", "关闭窗口时选“否”可隐藏到托盘继续运行；双击 KZZ 托盘图标恢复。"),
     ("8. 退出", "关闭窗口时选“是”，或在托盘菜单选择“退出 KzzMonitor”。"),
     ("9. 在线更新", "管理员配置更新清单地址后，点击“检查更新”；更新只替换程序和手册，不覆盖本工作簿、data 或 logs。"),
+    ("10. 监控面板", "控制台“监控面板”页直接显示现价、趋势、峰值、回撤、三段线、评级、强赎和更新时间。"),
+    ("11. 增删修改", "在监控面板选择行后修改表单并保存；同代码会更新原行，不会新增重复行。删除前会再次确认。"),
+    ("12. 重复防呆", "轮询自动跳过相同代码的后续行并警告；“合并重复项”保留首行、补齐空值并删除重复行。"),
     ("状态：监控正常", "交易时段正在轮询。"),
     ("状态：等待开市", "开盘前、午休、收盘后或非交易日，无需处理。"),
     ("午休补跑", "若今天尚未完成过完整轮询，即使启动时处于午休，也会先补跑一轮再等待13:00。"),
@@ -94,6 +101,7 @@ PARAMETER_ROWS = [
     ("近一年最高价", "程序维护", "最近 365 天历史最高价，当前主要用于展示。"),
     ("更新清单地址", "HTTPS/共享路径", "指向 update-manifest.json；更新只替换程序和手册，不覆盖用户 Excel、data 或 logs。"),
     ("Excel 待写队列", "自动", "Excel 被打开占用时，结果和提醒持久化到 data/monitor.db；下一次轮询自动重试。"),
+    ("重复代码", "自动拦截", "新增相同代码会更新已有行；既有重复行本轮只处理第一行，可点击“合并重复项”。"),
 ]
 
 SETTING_DESCRIPTIONS = {
@@ -226,6 +234,7 @@ def _populate_help_sheets(wb: Any) -> None:
         parameters.row_dimensions[row].height = 32
 
 
+@synchronized_path
 def refresh_help_sheets(path: Path) -> None:
     wb = load_workbook(path)
     try:
@@ -235,6 +244,7 @@ def refresh_help_sheets(path: Path) -> None:
         wb.close()
 
 
+@synchronized_path
 def migrate_workbook(path: Path) -> None:
     """原地补充新版配置和帮助页，不覆盖任何已有配置或监控数据。"""
     wb = load_workbook(path)
@@ -267,6 +277,7 @@ def migrate_workbook(path: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
+@synchronized_path
 def load_configuration(path: Path) -> tuple[AppSettings, list[BondConfig]]:
     wb = load_workbook(path, data_only=True, read_only=True)
     try:
@@ -299,11 +310,16 @@ def load_configuration(path: Path) -> tuple[AppSettings, list[BondConfig]]:
         sheet = wb[BONDS_SHEET]
         headers = {str(cell.value).strip(): cell.column for cell in sheet[1] if cell.value}
         result: list[BondConfig] = []
+        seen_codes: set[str] = set()
         for row in range(2, sheet.max_row + 1):
             get = lambda name: sheet.cell(row, headers[name]).value  # noqa: E731
             code = normalize_code(get("转债代码"))
             if not code or not _as_bool(get("启用")):
                 continue
+            if code in seen_codes:
+                logger.warning("监控列表存在重复转债 %s；本轮跳过重复行，可在监控面板一键合并", code)
+                continue
+            seen_codes.add(code)
             result.append(BondConfig(
                 code=code,
                 enabled=True,
@@ -322,6 +338,7 @@ def load_configuration(path: Path) -> tuple[AppSettings, list[BondConfig]]:
         wb.close()
 
 
+@synchronized_path
 def update_settings(path: Path, values: dict[str, Any]) -> None:
     """更新控制面板允许编辑的设置项，不改动监控列表和运行结果。"""
     wb = load_workbook(path)

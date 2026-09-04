@@ -11,10 +11,16 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
 from .config import ALERTS_SHEET, BOND_HEADERS, BONDS_SHEET, normalize_code
+from .file_locks import workbook_lock
 from .models import Evaluation, Quote
 
 logger = logging.getLogger(__name__)
 HEADER_INDEX = {name: index + 1 for index, name in enumerate(BOND_HEADERS)}
+def synchronized(method: Any) -> Any:
+    def wrapper(self: "ExcelStore", *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 def _value(value: Any) -> float | None:
@@ -29,7 +35,9 @@ def _value(value: Any) -> float | None:
 class ExcelStore:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._lock = workbook_lock(path)
 
+    @synchronized
     def import_adq(self, source: Path, sheet_name: str = "") -> int:
         if not source.exists():
             raise FileNotFoundError(f"安道全文件不存在: {source}")
@@ -82,6 +90,7 @@ class ExcelStore:
                 return row_number, positions
         raise ValueError("安道全工作表前 50 行未找到：代码、建仓线、加仓线、重仓线、当周评价/评级")
 
+    @synchronized
     def update_result(self, quote: Quote, evaluation: Evaluation, explanation: str = "") -> None:
         wb = load_workbook(self.path)
         try:
@@ -107,6 +116,7 @@ class ExcelStore:
         finally:
             wb.close()
 
+    @synchronized
     def append_alert(self, quote: Quote, alert_type: str, message: str) -> None:
         wb = load_workbook(self.path)
         try:
@@ -116,6 +126,7 @@ class ExcelStore:
         finally:
             wb.close()
 
+    @synchronized
     def mark_unavailable(self, code: str, checked_at: datetime, explanation: str) -> None:
         wb = load_workbook(self.path)
         try:
@@ -132,6 +143,121 @@ class ExcelStore:
                 sheet.cell(row_number, HEADER_INDEX[name], value)
             sheet.cell(row_number, HEADER_INDEX["当前价"]).fill = PatternFill("solid", fgColor="D9D9D9")
             self._safe_save(wb)
+        finally:
+            wb.close()
+
+    @synchronized
+    def list_bonds(self) -> list[dict[str, Any]]:
+        wb = load_workbook(self.path, data_only=True, read_only=True)
+        try:
+            sheet = wb[BONDS_SHEET]
+            headers = [str(cell.value or "").strip() for cell in sheet[1]]
+            return [
+                {headers[index]: value for index, value in enumerate(row) if index < len(headers)}
+                for row in sheet.iter_rows(min_row=2, values_only=True)
+                if normalize_code(row[HEADER_INDEX["转债代码"] - 1])
+            ]
+        finally:
+            wb.close()
+
+    @synchronized
+    def upsert_bond(self, values: dict[str, Any]) -> tuple[str, bool]:
+        code = normalize_code(values.get("转债代码"))
+        if not code.isdigit() or len(code) != 6:
+            raise ValueError("转债代码必须是六位数字")
+        build = _value(values.get("建仓线"))
+        add = _value(values.get("加仓线"))
+        heavy = _value(values.get("重仓线"))
+        sell_trigger = _value(values.get("卖出观察价"))
+        drawdown = _value(values.get("回撤提醒%"))
+        epsilon = _value(values.get("趋势最小跌幅"))
+        try:
+            trend_window = int(values.get("趋势窗口") or 3)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("趋势窗口必须是大于等于 2 的整数") from exc
+        if sell_trigger is None or sell_trigger <= 0:
+            raise ValueError("卖出观察价必须是正数")
+        if drawdown is None or not 0 < drawdown < 100:
+            raise ValueError("回撤提醒%必须大于 0 且小于 100")
+        if trend_window < 2:
+            raise ValueError("趋势窗口必须大于等于 2")
+        if epsilon is None or epsilon < 0:
+            raise ValueError("趋势最小跌幅必须是非负数")
+        configured = [item for item in (build, add, heavy) if item is not None]
+        if len(configured) >= 2 and configured != sorted(configured, reverse=True):
+            raise ValueError("三段线应满足：建仓线 ≥ 加仓线 ≥ 重仓线")
+        wb = load_workbook(self.path)
+        try:
+            sheet = wb[BONDS_SHEET]
+            matches = [
+                row for row in range(2, sheet.max_row + 1)
+                if normalize_code(sheet.cell(row, HEADER_INDEX["转债代码"]).value) == code
+            ]
+            created = not matches
+            row_number = matches[0] if matches else sheet.max_row + 1
+            values = dict(values)
+            values["转债代码"] = code
+            values.update({
+                "卖出观察价": sell_trigger, "回撤提醒%": drawdown,
+                "趋势窗口": trend_window, "趋势最小跌幅": epsilon,
+                "建仓线": build, "加仓线": add, "重仓线": heavy,
+            })
+            for name in BOND_HEADERS[:11]:
+                if name in values:
+                    sheet.cell(row_number, HEADER_INDEX[name], values[name])
+            sheet.auto_filter.ref = f"A1:T{sheet.max_row}"
+            self._safe_save(wb)
+            return code, created
+        finally:
+            wb.close()
+
+    @synchronized
+    def delete_bond(self, code: str) -> bool:
+        normalized = normalize_code(code)
+        wb = load_workbook(self.path)
+        try:
+            sheet = wb[BONDS_SHEET]
+            rows = [
+                row for row in range(2, sheet.max_row + 1)
+                if normalize_code(sheet.cell(row, HEADER_INDEX["转债代码"]).value) == normalized
+            ]
+            for row in reversed(rows):
+                sheet.delete_rows(row)
+            if rows:
+                sheet.auto_filter.ref = f"A1:T{max(2, sheet.max_row)}"
+                self._safe_save(wb)
+            return bool(rows)
+        finally:
+            wb.close()
+
+    @synchronized
+    def deduplicate_bonds(self) -> dict[str, int]:
+        wb = load_workbook(self.path)
+        try:
+            sheet = wb[BONDS_SHEET]
+            first_rows: dict[str, int] = {}
+            duplicate_rows: list[int] = []
+            duplicates: dict[str, int] = {}
+            for row in range(2, sheet.max_row + 1):
+                code = normalize_code(sheet.cell(row, HEADER_INDEX["转债代码"]).value)
+                if not code:
+                    continue
+                if code not in first_rows:
+                    first_rows[code] = row
+                    sheet.cell(row, HEADER_INDEX["转债代码"], code)
+                    continue
+                target = first_rows[code]
+                duplicates[code] = duplicates.get(code, 0) + 1
+                for column in range(1, len(BOND_HEADERS) + 1):
+                    if sheet.cell(target, column).value in (None, "") and sheet.cell(row, column).value not in (None, ""):
+                        sheet.cell(target, column, sheet.cell(row, column).value)
+                duplicate_rows.append(row)
+            for row in reversed(duplicate_rows):
+                sheet.delete_rows(row)
+            if duplicate_rows:
+                sheet.auto_filter.ref = f"A1:T{max(2, sheet.max_row)}"
+                self._safe_save(wb)
+            return duplicates
         finally:
             wb.close()
 

@@ -144,3 +144,11 @@ class StateStore:
         with self._lock:
             row = self.connection.execute("SELECT COUNT(*) FROM pending_excel_writes").fetchone()
         return int(row[0]) if row else 0
+
+    def delete_pending_for_code(self, code: str) -> None:
+        with self._lock:
+            self.connection.execute(
+                "DELETE FROM pending_excel_writes WHERE item_key=? OR item_key LIKE ?",
+                (f"result:{code}", f"alert:{code}:%"),
+            )
+            self.connection.commit()

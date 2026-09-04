@@ -6,6 +6,7 @@ import threading
 from zoneinfo import ZoneInfo
 
 import pytest
+from openpyxl import load_workbook
 
 from kzz_monitor.config import AppSettings, BondConfig, normalize_code
 from kzz_monitor.config import create_workbook, load_configuration, migrate_workbook
@@ -215,3 +216,41 @@ def test_excel_pending_queue_persists_and_flushes(tmp_path):
     restarted._flush_pending_excel_writes()
     assert restarted.state.pending_excel_write_count() == 0
     restarted.state.close()
+
+
+def test_monitor_crud_prevents_and_merges_duplicates(tmp_path):
+    workbook = tmp_path / "monitor.xlsx"
+    create_workbook(workbook, ["113043"])
+    store = ExcelStore(workbook)
+    values = {
+        "启用": True, "转债代码": "SH113043", "名称": "财通转债",
+        "卖出观察价": 135, "回撤提醒%": 6, "趋势窗口": 4,
+        "趋势最小跌幅": 0.2, "建仓线": 120, "加仓线": 115,
+        "重仓线": 110, "当周评价": "测试",
+    }
+    code, created = store.upsert_bond(values)
+    assert (code, created) == ("113043", False)
+    assert len(store.list_bonds()) == 1
+
+    wb = load_workbook(workbook)
+    sheet = wb["监控列表"]
+    sheet.append([True, "113043", "重复行", 130, 5, 3, 0.1])
+    wb.save(workbook)
+    wb.close()
+    _, loaded = load_configuration(workbook)
+    assert [bond.code for bond in loaded] == ["113043"]
+    assert store.deduplicate_bonds() == {"113043": 1}
+    assert len(store.list_bonds()) == 1
+    assert store.delete_bond("113043")
+    assert store.list_bonds() == []
+
+
+def test_monitor_crud_rejects_invalid_lines(tmp_path):
+    workbook = tmp_path / "monitor.xlsx"
+    create_workbook(workbook, ["113043"])
+    with pytest.raises(ValueError, match="建仓线"):
+        ExcelStore(workbook).upsert_bond({
+            "启用": True, "转债代码": "113043", "卖出观察价": 130,
+            "回撤提醒%": 5, "趋势窗口": 3, "趋势最小跌幅": 0.1,
+            "建仓线": 110, "加仓线": 115, "重仓线": 100,
+        })

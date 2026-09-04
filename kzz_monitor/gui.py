@@ -17,6 +17,7 @@ import pystray
 from . import __version__
 from .clock import china_now
 from .config import load_configuration, update_settings
+from .excel_store import ExcelStore
 from .notifier import Notifier
 from .platform_utils import open_path
 from .secrets import load_secret, save_secret
@@ -57,6 +58,9 @@ class MonitorApp:
         logging.getLogger().addHandler(self.log_handler)
         self.tray: pystray.Icon | None = None
         self.vars: dict[str, tk.Variable] = {}
+        self.bond_vars: dict[str, tk.Variable] = {}
+        self.excel_store = ExcelStore(workbook)
+        self.monitor_refresh_job: str | None = None
 
         self.root.title("可转债监控控制台")
         self.root.geometry("980x720")
@@ -68,6 +72,7 @@ class MonitorApp:
         self.root.after(200, self._drain_logs)
         self.root.after(500, self.start_monitor)
         self.root.after(1000, self._refresh_status)
+        self.root.after(1200, self.refresh_monitor_table)
         self.root.after(2500, self._startup_update_check)
 
     def _build_ui(self) -> None:
@@ -75,8 +80,13 @@ class MonitorApp:
         ui_font = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei UI"
         style.configure("Title.TLabel", font=(ui_font, 15, "bold"))
         style.configure("Status.TLabel", font=(ui_font, 11, "bold"))
-        container = ttk.Frame(self.root, padding=14)
-        container.pack(fill="both", expand=True)
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill="both", expand=True)
+        container = ttk.Frame(notebook, padding=14)
+        monitor_page = ttk.Frame(notebook, padding=10)
+        notebook.add(container, text="运行控制")
+        notebook.add(monitor_page, text="监控面板")
+        self._build_monitor_page(monitor_page)
 
         top = ttk.Frame(container)
         top.pack(fill="x")
@@ -165,6 +175,185 @@ class MonitorApp:
         self.log_text.configure(yscrollcommand=scroll.set)
         self.log_text.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+
+    def _build_monitor_page(self, parent: ttk.Frame) -> None:
+        columns = (
+            "启用", "转债代码", "名称", "当前价", "趋势", "近一年最高价", "监控峰值",
+            "回撤%", "仓位区域", "建仓线", "加仓线", "重仓线", "当周评价", "最近更新",
+            "强赎状态", "运行说明",
+        )
+        table_frame = ttk.Frame(parent)
+        table_frame.pack(fill="both", expand=True)
+        self.monitor_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=16)
+        widths = {"启用": 55, "转债代码": 85, "名称": 100, "当前价": 75, "趋势": 70,
+                  "近一年最高价": 105, "监控峰值": 90, "回撤%": 70, "仓位区域": 80,
+                  "建仓线": 75, "加仓线": 75, "重仓线": 75, "当周评价": 90, "最近更新": 145,
+                  "强赎状态": 130, "运行说明": 260}
+        for column in columns:
+            self.monitor_tree.heading(column, text=column)
+            self.monitor_tree.column(column, width=widths[column], anchor="center", stretch=False)
+        vertical = ttk.Scrollbar(table_frame, orient="vertical", command=self.monitor_tree.yview)
+        horizontal = ttk.Scrollbar(table_frame, orient="horizontal", command=self.monitor_tree.xview)
+        self.monitor_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.monitor_tree.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+        self.monitor_tree.bind("<<TreeviewSelect>>", self._load_selected_bond)
+
+        editor = ttk.LabelFrame(parent, text="新增或修改监控转债", padding=8)
+        editor.pack(fill="x", pady=(8, 0))
+        fields = (
+            ("启用", "启用", "check"), ("转债代码", "转债代码", "entry"),
+            ("名称", "名称", "entry"), ("卖出观察价", "卖出观察价", "entry"),
+            ("回撤提醒%", "回撤%", "entry"), ("趋势窗口", "趋势窗口", "entry"),
+            ("趋势最小跌幅", "最小变动", "entry"), ("建仓线", "建仓线", "entry"),
+            ("加仓线", "加仓线", "entry"), ("重仓线", "重仓线", "entry"),
+            ("当周评价", "当周评价", "entry"),
+        )
+        for index, (key, label, kind) in enumerate(fields):
+            row, pair = divmod(index, 4)
+            column = pair * 2
+            ttk.Label(editor, text=label).grid(row=row, column=column, sticky="w", padx=(0, 4), pady=3)
+            variable: tk.Variable = tk.BooleanVar(value=True) if kind == "check" else tk.StringVar()
+            if kind == "check":
+                ttk.Checkbutton(editor, variable=variable).grid(row=row, column=column + 1, sticky="w")
+            else:
+                ttk.Entry(editor, textvariable=variable, width=15).grid(row=row, column=column + 1, sticky="ew", padx=(0, 8))
+            self.bond_vars[key] = variable
+        for column in (1, 3, 5, 7):
+            editor.columnconfigure(column, weight=1)
+        buttons = ttk.Frame(editor)
+        buttons.grid(row=3, column=0, columnspan=8, sticky="ew", pady=(7, 0))
+        ttk.Button(buttons, text="新增/保存", command=self.save_bond).pack(side="left")
+        ttk.Button(buttons, text="删除选中", command=self.delete_selected_bond).pack(side="left", padx=6)
+        ttk.Button(buttons, text="清空表单", command=self.clear_bond_form).pack(side="left", padx=6)
+        ttk.Button(buttons, text="刷新结果", command=self.refresh_monitor_table).pack(side="left", padx=6)
+        ttk.Button(buttons, text="合并重复项", command=self.deduplicate_bonds).pack(side="left", padx=6)
+        self.monitor_message = ttk.Label(buttons, text="", foreground="#9a6700")
+        self.monitor_message.pack(side="right")
+        self.clear_bond_form()
+
+    @staticmethod
+    def _display_cell(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, float):
+            return f"{value:.3f}".rstrip("0").rstrip(".")
+        return str(value)
+
+    def refresh_monitor_table(self) -> None:
+        if self.monitor_refresh_job is not None:
+            try:
+                self.root.after_cancel(self.monitor_refresh_job)
+            except tk.TclError:
+                pass
+            self.monitor_refresh_job = None
+        try:
+            rows = self.excel_store.list_bonds()
+            selected_code = str(self.bond_vars["转债代码"].get()) if self.bond_vars else ""
+            for item in self.monitor_tree.get_children():
+                self.monitor_tree.delete(item)
+            counts: dict[str, int] = {}
+            columns = self.monitor_tree["columns"]
+            for index, row in enumerate(rows):
+                code = str(row.get("转债代码") or "")
+                counts[code] = counts.get(code, 0) + 1
+                values = [self._display_cell(row.get(column)) for column in columns]
+                item = self.monitor_tree.insert("", "end", iid=f"row-{index}", values=values)
+                if code == selected_code:
+                    self.monitor_tree.selection_set(item)
+            duplicates = {code: count for code, count in counts.items() if count > 1}
+            if duplicates:
+                detail = "，".join(f"{code}×{count}" for code, count in duplicates.items())
+                self.monitor_message.configure(text=f"发现重复：{detail}；轮询只处理首行")
+            else:
+                self.monitor_message.configure(text=f"共 {len(rows)} 条，无重复代码")
+        except PermissionError:
+            self.monitor_message.configure(text="工作簿正在被外部 Excel 占用，稍后再刷新")
+        except Exception as exc:
+            logger.exception("刷新监控面板失败")
+            self.monitor_message.configure(text=f"刷新失败：{exc}")
+        finally:
+            if not self.quitting:
+                self.monitor_refresh_job = self.root.after(5000, self.refresh_monitor_table)
+
+    def _load_selected_bond(self, _event: object = None) -> None:
+        selection = self.monitor_tree.selection()
+        if not selection:
+            return
+        values = self.monitor_tree.item(selection[0], "values")
+        columns = list(self.monitor_tree["columns"])
+        row = dict(zip(columns, values))
+        try:
+            source = next(
+                item for item in self.excel_store.list_bonds()
+                if str(item.get("转债代码") or "") == str(row.get("转债代码") or "")
+            )
+        except (StopIteration, PermissionError):
+            return
+        for key, variable in self.bond_vars.items():
+            value = source.get(key)
+            if isinstance(variable, tk.BooleanVar):
+                variable.set(bool(value))
+            else:
+                variable.set("" if value is None else value)
+
+    def clear_bond_form(self) -> None:
+        defaults: dict[str, Any] = {
+            "启用": True, "转债代码": "", "名称": "", "卖出观察价": 130,
+            "回撤提醒%": 5, "趋势窗口": 3, "趋势最小跌幅": 0.1,
+            "建仓线": "", "加仓线": "", "重仓线": "", "当周评价": "",
+        }
+        for key, value in defaults.items():
+            self.bond_vars[key].set(value)
+        if hasattr(self, "monitor_tree"):
+            self.monitor_tree.selection_remove(self.monitor_tree.selection())
+
+    def save_bond(self) -> None:
+        try:
+            values = {key: variable.get() for key, variable in self.bond_vars.items()}
+            code, created = self.excel_store.upsert_bond(values)
+            action = "新增" if created else "更新已有记录（未创建重复行）"
+            self._append_log(f"监控转债 {code}：{action}")
+            self.refresh_monitor_table()
+        except PermissionError:
+            messagebox.showerror("无法保存", "工作簿正在外部 Excel 中打开，请关闭后重试。")
+        except Exception as exc:
+            messagebox.showerror("参数有误", str(exc))
+
+    def delete_selected_bond(self) -> None:
+        code = str(self.bond_vars["转债代码"].get()).strip()
+        if not code:
+            messagebox.showinfo("删除监控", "请先在结果表中选择一只转债。")
+            return
+        if not messagebox.askyesno("删除监控", f"确定删除转债 {code} 的所有重复行和监控配置吗？"):
+            return
+        try:
+            if self.excel_store.delete_bond(code):
+                if self.service:
+                    self.service.state.delete_pending_for_code(code)
+                self._append_log(f"已删除监控转债：{code}")
+                self.clear_bond_form()
+                self.refresh_monitor_table()
+        except PermissionError:
+            messagebox.showerror("无法删除", "工作簿正在外部 Excel 中打开，请关闭后重试。")
+
+    def deduplicate_bonds(self) -> None:
+        try:
+            duplicates = self.excel_store.deduplicate_bonds()
+            if duplicates:
+                detail = "，".join(f"{code} 删除 {count} 行" for code, count in duplicates.items())
+                messagebox.showinfo("重复项已合并", detail)
+                self._append_log(f"监控列表重复项已合并：{detail}")
+            else:
+                messagebox.showinfo("重复检查", "没有发现重复转债代码。")
+            self.refresh_monitor_table()
+        except PermissionError:
+            messagebox.showerror("无法合并", "工作簿正在外部 Excel 中打开，请关闭后重试。")
 
     def _load_settings(self) -> None:
         settings, bonds = load_configuration(self.workbook)
