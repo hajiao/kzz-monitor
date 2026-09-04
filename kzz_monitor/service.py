@@ -5,7 +5,7 @@ import json
 import signal
 import threading
 from time import monotonic
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -153,7 +153,8 @@ class MonitorService:
                     self._status("running", "正在执行强制完整轮询")
                     logger.info("收到控制台指令：立即开始新一轮完整轮询")
                     cycle_started = monotonic()
-                    self._run_complete_cycle(settings, bonds)
+                    if self._run_complete_cycle(settings, bonds):
+                        self._mark_cycle_completed()
                     self._wait_for_next_cycle(settings, cycle_started)
                     continue
                 if not bonds:
@@ -167,17 +168,24 @@ class MonitorService:
                     self._wait_until_next_day()
                     continue
                 phase = self._market_phase(self.now().time(), settings)
+                if self._needs_lunch_catchup(phase, today):
+                    logger.info("今天尚未完成过轮询；午间休市期间先补跑一轮")
+                    self._status("running", "今日尚未轮询，正在午休期间补跑一轮")
+                    if self._run_complete_cycle(settings, bonds):
+                        self._mark_cycle_completed()
+                    continue
                 if phase == "open":
                     self._status("running", "交易时段，监控正常")
                     cycle_started = monotonic()
-                    self._run_open_cycle(settings, bonds)
+                    if self._run_open_cycle(settings, bonds):
+                        self._mark_cycle_completed()
                     self._wait_for_next_cycle(settings, cycle_started)
                 elif phase == "closed" and settings.final_cycle_after_close:
                     key = f"final_cycle:{today.isoformat()}"
                     if self.state.get_value(key) != "done":
                         logger.info("收盘后执行最后一轮完整更新")
-                        self._run_complete_cycle(settings, bonds)
-                        if not self.stop_event.is_set():
+                        if self._run_complete_cycle(settings, bonds):
+                            self._mark_cycle_completed()
                             self.state.set_value(key, "done")
                     else:
                         self._status("waiting", "已收盘并完成最终更新，等待下一交易日")
@@ -195,7 +203,8 @@ class MonitorService:
 
     def run_once(self) -> None:
         settings, bonds = self._prepare_configuration()
-        self._run_complete_cycle(settings, bonds, wait_between=False)
+        if self._run_complete_cycle(settings, bonds, wait_between=False):
+            self._mark_cycle_completed()
         self.state.close()
 
     def _prepare_configuration(self) -> tuple[AppSettings, list[BondConfig]]:
@@ -207,22 +216,41 @@ class MonitorService:
             logger.info("已从安道全文件更新 %d 只转债的评级和三段线", count)
         return load_configuration(self.workbook)
 
-    def _run_open_cycle(self, settings: AppSettings, bonds: list[BondConfig]) -> None:
-        for config in bonds:
+    def _run_open_cycle(self, settings: AppSettings, bonds: list[BondConfig]) -> bool:
+        for index, config in enumerate(bonds):
             if self.stop_event.is_set() or self._market_phase(self.now().time(), settings) != "open":
-                return
+                return False
             self._process(config, settings)
-            if self._wait(settings.poll_interval_seconds):
-                return
+            if index < len(bonds) - 1 and self._wait(settings.poll_interval_seconds):
+                return False
+        return True
 
-    def _run_complete_cycle(self, settings: AppSettings, bonds: list[BondConfig], wait_between: bool = True) -> None:
+    def _run_complete_cycle(self, settings: AppSettings, bonds: list[BondConfig], wait_between: bool = True) -> bool:
         for index, config in enumerate(bonds):
             if self.stop_event.is_set():
-                return
+                return False
             self._process(config, settings)
             if wait_between and index < len(bonds) - 1:
                 if self._wait(settings.poll_interval_seconds):
-                    return
+                    return False
+        return True
+
+    def _mark_cycle_completed(self) -> None:
+        completed_at = self.now().isoformat(timespec="seconds")
+        self.state.set_value("last_cycle_completed_at", completed_at)
+        logger.info("完整轮询完成：%s", completed_at)
+
+    def _last_cycle_is_today(self, today: date) -> bool:
+        value = self.state.get_value("last_cycle_completed_at")
+        if not value:
+            return False
+        try:
+            return datetime.fromisoformat(value).date() == today
+        except ValueError:
+            return False
+
+    def _needs_lunch_catchup(self, phase: str, today: date) -> bool:
+        return phase == "lunch" and not self._last_cycle_is_today(today)
 
     @staticmethod
     def _cycle_delay_seconds(cycle_interval_minutes: int, elapsed_seconds: float) -> float:

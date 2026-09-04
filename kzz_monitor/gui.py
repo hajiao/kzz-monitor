@@ -10,6 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
+from openpyxl import load_workbook
 from PIL import Image, ImageDraw
 import pystray
 
@@ -96,6 +97,7 @@ class MonitorApp:
             ("午间休市结束", "午休结束", "entry"),
             ("收盘时间", "收盘时间", "entry"),
             ("安道全文件", "安道全文件", "file"),
+            ("安道全工作表", "安道全工作表", "sheet"),
             ("桌面通知", "桌面通知", "check"),
             ("邮件通知", "邮件通知", "check"),
             ("邮件收件人", "邮件收件人", "entry"),
@@ -115,6 +117,13 @@ class MonitorApp:
             if kind == "check":
                 variable: tk.Variable = tk.BooleanVar()
                 ttk.Checkbutton(settings_box, variable=variable).grid(row=row, column=base + 1, sticky="w", pady=4)
+            elif kind == "sheet":
+                variable = tk.StringVar()
+                self.adq_sheet_combo = ttk.Combobox(
+                    settings_box, textvariable=variable, state="readonly", width=28
+                )
+                self.adq_sheet_combo.grid(row=row, column=base + 1, sticky="ew", pady=4)
+                self.adq_sheet_combo.bind("<<ComboboxSelected>>", lambda _event: self.save_settings())
             else:
                 variable = tk.StringVar()
                 entry = ttk.Entry(settings_box, textvariable=variable, width=28 if kind != "file" else 42)
@@ -141,6 +150,7 @@ class MonitorApp:
         ttk.Button(primary_actions, text="刷新安道全", command=self.refresh_adq).pack(side="left", padx=6)
         ttk.Button(primary_actions, text="保存设置", command=self.save_settings).pack(side="left", padx=6)
         ttk.Button(primary_actions, text="测试邮件", command=self.test_email).pack(side="left", padx=6)
+        ttk.Button(primary_actions, text="测试桌面提醒", command=self.test_desktop).pack(side="left", padx=6)
         ttk.Button(secondary_actions, text="打开监控表", command=self.open_workbook).pack(side="left")
         ttk.Button(secondary_actions, text="操作手册", command=self.open_manual).pack(side="left", padx=6)
         ttk.Button(secondary_actions, text="检查更新", command=self.check_updates).pack(side="left", padx=6)
@@ -166,6 +176,7 @@ class MonitorApp:
             "午间休市结束": settings.lunch_end.strftime("%H:%M"),
             "收盘时间": settings.close_time.strftime("%H:%M"),
             "安道全文件": str(settings.adq_file or ""),
+            "安道全工作表": settings.adq_sheet,
             "桌面通知": settings.desktop_notification,
             "邮件通知": settings.email_notification,
             "邮件收件人": ",".join(settings.email_recipients),
@@ -180,6 +191,11 @@ class MonitorApp:
         }
         for key, value in values.items():
             self.vars[key].set(value)
+        try:
+            self._load_adq_sheet_options(settings.adq_file, settings.adq_sheet)
+        except Exception:
+            self.adq_sheet_combo.configure(values=[])
+            logger.exception("读取已配置的安道全工作表列表失败")
         self.summary_label.configure(text=f"配置文件：{self.workbook}    已启用转债：{len(bonds)} 只")
 
     def save_settings(self) -> bool:
@@ -209,6 +225,27 @@ class MonitorApp:
         selected = filedialog.askopenfilename(title="选择安道全 Excel", filetypes=[("Excel 工作簿", "*.xlsx *.xlsm"), ("所有文件", "*.*")])
         if selected:
             self.vars["安道全文件"].set(selected)
+            try:
+                self._load_adq_sheet_options(Path(selected), "")
+            except Exception as exc:
+                messagebox.showerror("无法读取工作表", str(exc))
+                return
+            if self.save_settings():
+                self._append_log(f"已选择并保存安道全文件：{selected}")
+
+    def _load_adq_sheet_options(self, path: Path | None, preferred: str) -> None:
+        if not hasattr(self, "adq_sheet_combo"):
+            return
+        names: list[str] = []
+        if path and path.exists():
+            workbook = load_workbook(path, read_only=True, data_only=True)
+            try:
+                names = list(workbook.sheetnames)
+            finally:
+                workbook.close()
+        self.adq_sheet_combo.configure(values=names)
+        selected = preferred if preferred in names else (names[0] if names else "")
+        self.vars["安道全工作表"].set(selected)
 
     def start_monitor(self) -> None:
         if self.worker and self.worker.is_alive():
@@ -281,6 +318,15 @@ class MonitorApp:
             logger.exception("测试邮件失败")
             messagebox.showerror("测试失败", str(exc))
 
+    def test_desktop(self) -> None:
+        try:
+            settings, _ = load_configuration(self.workbook)
+            Notifier(settings, self.state_path.parent / "smtp_secret.bin").send_desktop_test()
+            self._append_log("已发送 Windows 通知中心/系统通知测试。")
+        except Exception as exc:
+            logger.exception("测试桌面提醒失败")
+            messagebox.showerror("测试失败", str(exc))
+
     def _mark_stopped(self) -> None:
         self.service = None
         self.worker = None
@@ -292,15 +338,19 @@ class MonitorApp:
         now = china_now().strftime("%Y-%m-%d %H:%M:%S")
         current = "运行中" if running else "已停止"
         pending = 0
+        last_cycle = "尚无记录"
         if self.service and running:
             try:
                 pending = self.service.state.pending_excel_write_count()
+                stored = self.service.state.get_value("last_cycle_completed_at")
+                if stored:
+                    last_cycle = datetime.fromisoformat(stored).strftime("%Y-%m-%d %H:%M:%S")
             except Exception:
                 pending = 0
         self.root.title(f"可转债监控控制台 - {current}")
         base_text = self.summary_label.cget("text").split("    北京时间")[0]
         self.summary_label.configure(
-            text=f"{base_text}    北京时间：{now}    Excel待写：{pending} 条"
+            text=f"{base_text}    北京时间：{now}    上次完整轮询：{last_cycle}    Excel待写：{pending} 条"
         )
         if not self.quitting:
             self.root.after(1000, self._refresh_status)

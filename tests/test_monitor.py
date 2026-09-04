@@ -88,6 +88,29 @@ def test_wait_until_next_day_preserves_timezone(tmp_path):
     service.state.close()
 
 
+def test_last_complete_cycle_is_persisted_by_date(tmp_path):
+    class ProviderStub:
+        pass
+
+    workbook = tmp_path / "monitor.xlsx"
+    create_workbook(workbook, ["113043"])
+    current = datetime(2026, 9, 4, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    service = MonitorService(
+        workbook,
+        tmp_path / "monitor.db",
+        provider=ProviderStub(),  # type: ignore[arg-type]
+        now=lambda: current,
+    )
+    assert not service._last_cycle_is_today(current.date())
+    assert service._needs_lunch_catchup("lunch", current.date())
+    assert not service._needs_lunch_catchup("before", current.date())
+    service._mark_cycle_completed()
+    assert service._last_cycle_is_today(current.date())
+    assert not service._needs_lunch_catchup("lunch", current.date())
+    assert not service._last_cycle_is_today(datetime(2026, 9, 5).date())
+    service.state.close()
+
+
 def test_code_and_exchange_normalization():
     assert normalize_code("SZ127015") == "127015"
     assert normalize_code(110059.0) == "110059"

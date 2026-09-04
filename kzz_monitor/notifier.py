@@ -31,6 +31,9 @@ class Notifier:
     def send_email_test(self) -> bool:
         return self._email("邮件配置测试", "KzzMonitor 邮件发送设置有效。")
 
+    def send_desktop_test(self) -> None:
+        self._desktop("KzzMonitor 桌面提醒测试", "这是 Windows 通知中心横幅，不会阻塞轮询。")
+
     @staticmethod
     def _desktop(title: str, message: str) -> None:
         try:
