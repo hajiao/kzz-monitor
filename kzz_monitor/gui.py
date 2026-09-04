@@ -228,7 +228,7 @@ class MonitorApp:
         labels = {
             "checking": ("● 正在检查", "#c27c00"),
             "running": ("● 监控正常", "#14833b"),
-            "waiting": ("● 等待开市", "#2563a8"),
+            "waiting": ("● 非交易时段", "#2563a8"),
             "error": ("● 异常重试中", "#b42318"),
             "stopped": ("● 已停止", "#b42318"),
         }

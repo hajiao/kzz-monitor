@@ -183,7 +183,7 @@ class MonitorService:
                         self._status("waiting", "已收盘并完成最终更新，等待下一交易日")
                         self._wait_until_next_day()
                 else:
-                    self._status("waiting", "非交易时段，等待开市")
+                    self._status("waiting", self._phase_wait_message(phase, settings))
                     self._wait(30)
             except Exception:
                 logger.exception("主循环异常，60 秒后重试")
@@ -398,6 +398,16 @@ class MonitorService:
         if settings.lunch_end <= current < settings.close_time:
             return "open"
         return "closed"
+
+    @staticmethod
+    def _phase_wait_message(phase: str, settings: AppSettings) -> str:
+        if phase == "before":
+            return f"开盘前，等待 {settings.open_time.strftime('%H:%M')} 开市"
+        if phase == "lunch":
+            return f"午间休市，等待 {settings.lunch_end.strftime('%H:%M')} 恢复交易"
+        if phase == "closed":
+            return "今日已收盘，等待下一交易日"
+        return "等待进入交易时段"
 
     def _wait_until_next_day(self) -> None:
         now = self.now()

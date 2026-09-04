@@ -57,6 +57,9 @@ def test_market_phases():
     assert MonitorService._market_phase(time(12, 0), settings) == "lunch"
     assert MonitorService._market_phase(time(14, 59), settings) == "open"
     assert MonitorService._market_phase(time(15, 0), settings) == "closed"
+    assert MonitorService._phase_wait_message("before", settings) == "开盘前，等待 09:30 开市"
+    assert MonitorService._phase_wait_message("lunch", settings) == "午间休市，等待 13:00 恢复交易"
+    assert MonitorService._phase_wait_message("closed", settings) == "今日已收盘，等待下一交易日"
 
 
 def test_cycle_delay_is_start_to_start_and_never_negative():
