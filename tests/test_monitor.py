@@ -17,6 +17,7 @@ from kzz_monitor.provider import exchange_symbol
 from kzz_monitor.service import AlertEngine, MonitorService
 from kzz_monitor.storage import StateStore
 from kzz_monitor.updater import check_for_update
+from kzz_monitor.updater import _launch_windows_replacer
 
 
 def quote(price: float, minute: int) -> Quote:
@@ -291,3 +292,23 @@ def test_monitor_visual_alert_priority_and_contrast_states():
     assert classify_bond_row({**base, "趋势": "无实时行情"}).key == "unavailable"
     assert classify_bond_row({"趋势": "震荡", "强赎状态": "未开始"}).key == "normal"
     assert classify_bond_row({"趋势": "震荡"}, sell_latched=True).key == "sell"
+
+
+def test_windows_update_replacer_has_retry_restart_and_log(tmp_path, monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "kzz_monitor.updater.subprocess.Popen",
+        lambda command, **_kwargs: calls.append(command),
+    )
+    staging = tmp_path / "staging"
+    payload = staging / "payload"
+    target = tmp_path / "app"
+    payload.mkdir(parents=True)
+    target.mkdir()
+    (payload / "KzzMonitor.exe").write_bytes(b"new")
+    _launch_windows_replacer(staging, payload, target)
+    script = (staging / "install-update.ps1").read_text(encoding="utf-8-sig")
+    assert "for ($i=1; $i -le 20; $i++)" in script
+    assert "for ($i=1; $i -le 3; $i++)" in script
+    assert "重启成功" in script
+    assert "update.log" in " ".join(calls[0])

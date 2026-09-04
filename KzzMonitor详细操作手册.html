@@ -664,6 +664,7 @@ blockquote{margin:18px 0;padding:12px 18px;border-left:5px solid #e49b26;backgro
 <li>替换程序和手册；</li>
 <li>自动重新启动。</li>
 </ol>
+<p>Windows 更新替换过程会写入 <code>logs/update.log</code>。如果程序更新后没有自动出现，可先手工双击一次程序，再查看该日志。更新器会等待所有旧实例退出，最多尝试 20 次替换文件，并最多尝试 3 次启动；每次启动后观察 5 秒，确认新进程没有提前退出。</p>
 <p>默认更新策略为：</p>
 <ul>
 <li>每次启动约 2.5 秒后检查一次；</li>

@@ -123,15 +123,42 @@ def stage_and_launch_update(info: UpdateInfo, application_base: Path) -> None:
 def _launch_windows_replacer(staging: Path, payload: Path, base: Path) -> None:
     script = staging / "install-update.ps1"
     target_exe = base / "KzzMonitor.exe"
+    log_path = base / "logs" / "update.log"
     script.write_text(
-        "param([int]$ProcessId,[string]$Payload,[string]$TargetDir,[string]$TargetExe)\n"
+        "param([int]$ProcessId,[string]$Payload,[string]$TargetDir,[string]$TargetExe,[string]$LogPath)\n"
         "$ErrorActionPreference='Stop'\n"
-        "Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue\n"
-        "Start-Sleep -Milliseconds 800\n"
-        "Copy-Item (Join-Path $Payload 'KzzMonitor.exe') $TargetExe -Force\n"
-        "Get-ChildItem $Payload -File | Where-Object Name -ne 'KzzMonitor.exe' | "
-        "ForEach-Object { Copy-Item $_.FullName (Join-Path $TargetDir $_.Name) -Force }\n"
-        "Start-Process $TargetExe\n"
+        "New-Item -ItemType Directory -Force (Split-Path $LogPath) | Out-Null\n"
+        "function Write-UpdateLog([string]$Message) { Add-Content -Path $LogPath -Encoding UTF8 "
+        "-Value \"$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message\" }\n"
+        "try {\n"
+        "  Write-UpdateLog \"开始更新，等待旧进程 $ProcessId 退出\"\n"
+        "  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue\n"
+        "  for ($i=0; $i -lt 30; $i++) {\n"
+        "    $old = Get-CimInstance Win32_Process -Filter \"Name='KzzMonitor.exe'\" -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.ExecutablePath -eq $TargetExe }\n"
+        "    if (-not $old) { break }; Start-Sleep -Milliseconds 500\n"
+        "  }\n"
+        "  $copied=$false\n"
+        "  for ($i=1; $i -le 20; $i++) {\n"
+        "    try { Copy-Item (Join-Path $Payload 'KzzMonitor.exe') $TargetExe -Force; $copied=$true; break } "
+        "catch { Write-UpdateLog \"第 $i 次替换失败：$($_.Exception.Message)\"; Start-Sleep -Seconds 1 }\n"
+        "  }\n"
+        "  if (-not $copied) { throw '20 次尝试后仍无法替换 KzzMonitor.exe' }\n"
+        "  Get-ChildItem $Payload -File | Where-Object Name -ne 'KzzMonitor.exe' | ForEach-Object { "
+        "try { Copy-Item $_.FullName (Join-Path $TargetDir $_.Name) -Force } catch { "
+        "Write-UpdateLog \"手册更新失败但程序继续：$($_.Exception.Message)\" } }\n"
+        "  Write-UpdateLog '程序文件替换成功，准备重启'\n"
+        "  Start-Sleep -Seconds 2\n"
+        "  $started=$false\n"
+        "  for ($i=1; $i -le 3; $i++) {\n"
+        "    $process=Start-Process -FilePath $TargetExe -WorkingDirectory $TargetDir -PassThru\n"
+        "    Start-Sleep -Seconds 5\n"
+        "    if (-not $process.HasExited) { $started=$true; Write-UpdateLog \"重启成功，PID=$($process.Id)\"; break }\n"
+        "    Write-UpdateLog \"第 $i 次重启后进程提前退出，退出码=$($process.ExitCode)\"\n"
+        "    Start-Sleep -Seconds 2\n"
+        "  }\n"
+        "  if (-not $started) { throw '更新成功，但三次重启均失败；请手动启动 KzzMonitor.exe' }\n"
+        "} catch { Write-UpdateLog \"更新失败：$($_.Exception.Message)\" }\n"
         "Start-Sleep -Seconds 2\n"
         "Remove-Item (Split-Path $Payload -Parent) -Recurse -Force -ErrorAction SilentlyContinue\n",
         encoding="utf-8-sig",
@@ -140,7 +167,7 @@ def _launch_windows_replacer(staging: Path, payload: Path, base: Path) -> None:
         [
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
             "-ProcessId", str(os.getpid()), "-Payload", str(payload), "-TargetDir", str(base),
-            "-TargetExe", str(target_exe),
+            "-TargetExe", str(target_exe), "-LogPath", str(log_path),
         ],
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )

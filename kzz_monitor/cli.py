@@ -125,9 +125,10 @@ def main() -> None:
     if "--version-probe" in sys.argv:
         import sqlite3
         import ssl
+        from . import __version__
 
         (application_dir() / "exe-self-test.txt").write_text(
-            f"ok\nssl={ssl.OPENSSL_VERSION}\nsqlite={sqlite3.sqlite_version}\n",
+            f"ok\nversion={__version__}\nssl={ssl.OPENSSL_VERSION}\nsqlite={sqlite3.sqlite_version}\n",
             encoding="utf-8",
         )
         return
