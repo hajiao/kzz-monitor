@@ -20,7 +20,7 @@ BONDS_SHEET = "监控列表"
 ALERTS_SHEET = "提醒记录"
 GUIDE_SHEET = "使用说明"
 PARAMETERS_SHEET = "参数说明"
-WORKBOOK_SCHEMA_VERSION = "1.3.0"
+WORKBOOK_SCHEMA_VERSION = "1.3.1"
 DEFAULT_UPDATE_MANIFEST_URL = (
     "https://github.com/hajiao/kzz-monitor/releases/latest/download/update-manifest.json"
 )
@@ -80,6 +80,7 @@ GUIDE_ROWS = [
     ("状态：监控正常", "交易时段正在轮询。"),
     ("状态：等待开市", "开盘前、午休、收盘后或非交易日，无需处理。"),
     ("午休补跑", "若今天尚未完成过完整轮询，即使启动时处于午休，也会先补跑一轮再等待13:00。"),
+    ("收盘断点续跑", "收盘最终轮询每完成一只就保存进度；在线更新或重启后跳过已完成代码，从下一只继续。"),
     ("提醒形式", "除邮件外是 Windows 通知中心/macOS 系统通知，不是阻塞弹窗；可在控制台测试。"),
     ("状态：异常重试中", "打开日志目录，查看最后一个错误；程序一般会自动重试。"),
     ("常见问题：无法写 Excel", "先保存并关闭正在打开的可转债监控.xlsx。"),

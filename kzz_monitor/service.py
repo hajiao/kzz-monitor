@@ -183,8 +183,8 @@ class MonitorService:
                 elif phase == "closed" and settings.final_cycle_after_close:
                     key = f"final_cycle:{today.isoformat()}"
                     if self.state.get_value(key) != "done":
-                        logger.info("收盘后执行最后一轮完整更新")
-                        if self._run_complete_cycle(settings, bonds):
+                        logger.info("收盘后执行最后一轮完整更新（支持断点续跑）")
+                        if self._run_resumable_final_cycle(settings, bonds, today):
                             self._mark_cycle_completed()
                             self.state.set_value(key, "done")
                     else:
@@ -235,6 +235,39 @@ class MonitorService:
             if wait_between and index < len(bonds) - 1:
                 if self._wait(settings.poll_interval_seconds):
                     return False
+        return True
+
+    def _run_resumable_final_cycle(
+        self, settings: AppSettings, bonds: list[BondConfig], trade_date: date
+    ) -> bool:
+        progress_key = f"final_cycle_progress:{trade_date.isoformat()}"
+        raw_progress = self.state.get_value(progress_key, "[]")
+        try:
+            completed = {str(code) for code in json.loads(raw_progress)}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            logger.warning("收盘轮询断点记录损坏，已从空进度恢复")
+            completed = set()
+        current_codes = {bond.code for bond in bonds}
+        completed.intersection_update(current_codes)
+        if completed:
+            logger.info("恢复收盘轮询断点：已完成 %d/%d，只处理剩余转债", len(completed), len(bonds))
+            self._status("running", f"恢复收盘轮询：已完成 {len(completed)}/{len(bonds)}")
+        remaining = [bond for bond in bonds if bond.code not in completed]
+        if not remaining:
+            self.state.delete_value(progress_key)
+            return True
+        quotes = self.provider.refresh_spot(self.now())
+        for index, config in enumerate(remaining):
+            if self.stop_event.is_set():
+                return False
+            self._process(config, settings, quotes)
+            completed.add(config.code)
+            self.state.set_value(progress_key, json.dumps(sorted(completed), ensure_ascii=False))
+            logger.info("收盘轮询进度：%d/%d（刚完成 %s）", len(completed), len(bonds), config.code)
+            self._status("running", f"收盘轮询进度 {len(completed)}/{len(bonds)}")
+            if index < len(remaining) - 1 and self._wait(settings.poll_interval_seconds):
+                return False
+        self.state.delete_value(progress_key)
         return True
 
     def _mark_cycle_completed(self) -> None:

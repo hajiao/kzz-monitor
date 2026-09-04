@@ -101,6 +101,11 @@ class StateStore:
             row = self.connection.execute("SELECT value FROM runtime_state WHERE key=?", (key,)).fetchone()
         return str(row[0]) if row else default
 
+    def delete_value(self, key: str) -> None:
+        with self._lock:
+            self.connection.execute("DELETE FROM runtime_state WHERE key=?", (key,))
+            self.connection.commit()
+
     def claim_alert(self, fingerprint: str, now: datetime) -> bool:
         with self._lock:
             cursor = self.connection.execute(

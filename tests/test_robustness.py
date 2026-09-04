@@ -51,6 +51,50 @@ def test_one_spot_request_per_complete_cycle(tmp_path, monkeypatch):
     service.state.close()
 
 
+def test_after_hours_cycle_resumes_after_restart_without_repeating_completed_bonds(tmp_path, monkeypatch):
+    workbook = tmp_path / "monitor.xlsx"
+    create_workbook(workbook, ["113043", "113056", "127049"])
+    database = tmp_path / "state.db"
+    settings = AppSettings(poll_interval_seconds=10)
+    bonds = [BondConfig("113043"), BondConfig("113056"), BondConfig("127049")]
+
+    first_provider = ProviderStub()
+    first_provider.refresh_spot = lambda now=None: {}  # type: ignore[method-assign]
+    first = MonitorService(workbook, database, provider=first_provider)  # type: ignore[arg-type]
+    first_processed: list[str] = []
+    monkeypatch.setattr(first, "_process", lambda config, _settings, quotes=None: first_processed.append(config.code))
+    monkeypatch.setattr(first, "_wait", lambda _seconds: True)
+    assert not first._run_resumable_final_cycle(settings, bonds, datetime(2026, 9, 4).date())
+    assert first_processed == ["113043"]
+    assert json.loads(first.state.get_value("final_cycle_progress:2026-09-04")) == ["113043"]
+    first.state.close()
+
+    second_provider = ProviderStub()
+    second_provider.refresh_spot = lambda now=None: {}  # type: ignore[method-assign]
+    second = MonitorService(workbook, database, provider=second_provider)  # type: ignore[arg-type]
+    second_processed: list[str] = []
+    monkeypatch.setattr(second, "_process", lambda config, _settings, quotes=None: second_processed.append(config.code))
+    monkeypatch.setattr(second, "_wait", lambda _seconds: False)
+    assert second._run_resumable_final_cycle(settings, bonds, datetime(2026, 9, 4).date())
+    assert second_processed == ["113056", "127049"]
+    assert second.state.get_value("final_cycle_progress:2026-09-04") == ""
+    second.state.close()
+
+
+def test_corrupt_after_hours_checkpoint_recovers_from_empty_progress(tmp_path, monkeypatch):
+    workbook = tmp_path / "monitor.xlsx"
+    create_workbook(workbook, ["113043"])
+    service = MonitorService(workbook, tmp_path / "state.db", provider=ProviderStub())  # type: ignore[arg-type]
+    service.state.set_value("final_cycle_progress:2026-09-04", "not-json")
+    processed: list[str] = []
+    monkeypatch.setattr(service, "_process", lambda config, _settings, quotes=None: processed.append(config.code))
+    assert service._run_resumable_final_cycle(
+        AppSettings(), [BondConfig("113043")], datetime(2026, 9, 4).date()
+    )
+    assert processed == ["113043"]
+    service.state.close()
+
+
 def test_poison_pending_write_does_not_block_valid_item(tmp_path):
     workbook = tmp_path / "monitor.xlsx"
     create_workbook(workbook, ["113043"])
