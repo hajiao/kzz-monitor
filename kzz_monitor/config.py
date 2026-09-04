@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
@@ -10,7 +11,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from .models import BondConfig
-from .file_locks import synchronized_path
+from .file_locks import cleanup_temporary, replace_with_retry, synchronized_path
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ BONDS_SHEET = "监控列表"
 ALERTS_SHEET = "提醒记录"
 GUIDE_SHEET = "使用说明"
 PARAMETERS_SHEET = "参数说明"
-WORKBOOK_SCHEMA_VERSION = "1.2.6"
+WORKBOOK_SCHEMA_VERSION = "1.3.0"
 DEFAULT_UPDATE_MANIFEST_URL = (
     "https://github.com/hajiao/kzz-monitor/releases/latest/download/update-manifest.json"
 )
@@ -258,18 +259,22 @@ def _populate_help_sheets(wb: Any) -> None:
 @synchronized_path
 def refresh_help_sheets(path: Path) -> None:
     wb = load_workbook(path)
+    temporary = path.with_name(f".{path.stem}.{uuid.uuid4().hex}.help{path.suffix}")
     try:
         _populate_help_sheets(wb)
-        wb.save(path)
+        wb.save(temporary)
+        wb.close()
+        replace_with_retry(temporary, path)
     finally:
         wb.close()
+        cleanup_temporary(temporary)
 
 
 @synchronized_path
 def migrate_workbook(path: Path) -> None:
     """原地补充新版配置和帮助页，不覆盖任何已有配置或监控数据。"""
     wb = load_workbook(path)
-    temporary = path.with_name(f".{path.stem}.migrating{path.suffix}")
+    temporary = path.with_name(f".{path.stem}.{uuid.uuid4().hex}.migrating{path.suffix}")
     try:
         settings = wb[SETTINGS_SHEET]
         rows = {
@@ -292,10 +297,10 @@ def migrate_workbook(path: Path) -> None:
         _populate_help_sheets(wb)
         wb.save(temporary)
         wb.close()
-        temporary.replace(path)
+        replace_with_retry(temporary, path)
     finally:
         wb.close()
-        temporary.unlink(missing_ok=True)
+        cleanup_temporary(temporary)
 
 
 @synchronized_path
@@ -365,6 +370,7 @@ def load_configuration(path: Path) -> tuple[AppSettings, list[BondConfig]]:
 def update_settings(path: Path, values: dict[str, Any]) -> None:
     """更新控制面板允许编辑的设置项，不改动监控列表和运行结果。"""
     wb = load_workbook(path)
+    temporary = path.with_name(f".{path.stem}.{uuid.uuid4().hex}.settings{path.suffix}")
     try:
         sheet = wb[SETTINGS_SHEET]
         rows = {str(sheet.cell(row, 1).value).strip(): row for row in range(2, sheet.max_row + 1)}
@@ -374,10 +380,10 @@ def update_settings(path: Path, values: dict[str, Any]) -> None:
                 rows[key] = sheet.max_row
             else:
                 sheet.cell(rows[key], 2, value)
-        temporary = path.with_name(f".{path.stem}.settings{path.suffix}")
         wb.save(temporary)
         wb.close()
-        temporary.replace(path)
+        replace_with_retry(temporary, path)
     finally:
         if getattr(wb, "_archive", None) is not None:
             wb.close()
+        cleanup_temporary(temporary)

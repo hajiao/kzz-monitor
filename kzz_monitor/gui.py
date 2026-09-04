@@ -6,6 +6,7 @@ import sys
 import threading
 import tkinter as tk
 from datetime import datetime
+from time import monotonic
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
@@ -66,6 +67,8 @@ class MonitorApp:
         self.monitor_refresh_in_progress = False
         self.monitor_rows_by_code: dict[str, dict[str, Any]] = {}
         self.search_labels: dict[str, str] = {}
+        self.pending_excel_count = 0
+        self.last_cycle_text = "尚无记录"
         self.only_alerts_var = tk.BooleanVar(value=False)
         self.update_check_job: str | None = None
         self.update_check_in_progress = False
@@ -313,48 +316,75 @@ class MonitorApp:
         if self.monitor_refresh_in_progress:
             return
         self.monitor_refresh_in_progress = True
+        only_alerts = self.only_alerts_var.get()
         threading.Thread(
             target=self._load_monitor_rows_worker,
+            args=(only_alerts,),
             daemon=True,
             name="KzzMonitorTableReader",
         ).start()
 
-    def _load_monitor_rows_worker(self) -> None:
+    def _load_monitor_rows_worker(self, only_alerts: bool) -> None:
         try:
             rows = self.excel_store.list_bonds()
-            self._post_ui(self._apply_monitor_rows, rows, None)
+            prepared: list[dict[str, Any]] = []
+            pending = 0
+            last_cycle = "尚无记录"
+            service = self.service
+            if service:
+                pending = service.state.pending_excel_write_count()
+                stored = service.state.get_value("last_cycle_completed_at")
+                if stored:
+                    last_cycle = datetime.fromisoformat(stored).strftime("%Y-%m-%d %H:%M:%S")
+            for row in rows:
+                code = str(row.get("转债代码") or "")
+                sell_latched = bool(
+                    service and service.state.get_value(f"sell_latched:{code}", "0") == "1"
+                )
+                visual = classify_bond_row(row, sell_latched)
+                if not only_alerts or visual.is_alert:
+                    item = dict(row)
+                    item["__visual"] = visual
+                    prepared.append(item)
+            self._post_ui(self._apply_monitor_rows, rows, prepared, pending, last_cycle, None)
         except PermissionError:
-            self._post_ui(self._apply_monitor_rows, [], "工作簿正在被外部 Excel 占用，稍后再刷新")
+            self._post_ui(self._apply_monitor_rows, [], [], 0, "尚无记录", "工作簿正在被外部 Excel 占用，稍后再刷新")
         except Exception as exc:
             logger.exception("刷新监控面板失败")
-            self._post_ui(self._apply_monitor_rows, [], f"刷新失败：{exc}")
+            self._post_ui(self._apply_monitor_rows, [], [], 0, "尚无记录", f"刷新失败：{exc}")
 
-    def _apply_monitor_rows(self, rows: list[dict[str, Any]], error: str | None) -> None:
+    def _apply_monitor_rows(
+        self,
+        all_rows: list[dict[str, Any]],
+        rows: list[dict[str, Any]],
+        pending: int,
+        last_cycle: str,
+        error: str | None,
+    ) -> None:
         self.monitor_refresh_in_progress = False
         if error:
             self.monitor_message.configure(text=error)
             self._schedule_monitor_refresh()
             return
         try:
+            self.pending_excel_count = pending
+            self.last_cycle_text = last_cycle
             selected_code = str(self.bond_vars["转债代码"].get()) if self.bond_vars else ""
             self.monitor_rows_by_code = {
-                str(row.get("转债代码") or ""): row for row in reversed(rows)
+                str(row.get("转债代码") or ""): row for row in reversed(all_rows)
             }
-            self._refresh_search_choices(rows)
+            self._refresh_search_choices(all_rows)
             for item in self.monitor_tree.get_children():
                 self.monitor_tree.delete(item)
             counts: dict[str, int] = {}
+            for source_row in all_rows:
+                source_code = str(source_row.get("转债代码") or "")
+                counts[source_code] = counts.get(source_code, 0) + 1
             alert_counts: dict[str, int] = {}
             columns = self.monitor_tree["columns"]
             for index, row in enumerate(rows):
                 code = str(row.get("转债代码") or "")
-                counts[code] = counts.get(code, 0) + 1
-                sell_latched = False
-                if self.service:
-                    sell_latched = self.service.state.get_value(f"sell_latched:{code}", "0") == "1"
-                visual = classify_bond_row(row, sell_latched)
-                if self.only_alerts_var.get() and not visual.is_alert:
-                    continue
+                visual = row["__visual"]
                 if visual.is_alert:
                     alert_counts[visual.label] = alert_counts.get(visual.label, 0) + 1
                 values = [
@@ -371,7 +401,7 @@ class MonitorApp:
                 self.monitor_message.configure(text=f"发现重复：{detail}；轮询只处理首行")
             else:
                 alert_text = "，".join(f"{name}{count}" for name, count in alert_counts.items()) or "无提醒"
-                self.monitor_message.configure(text=f"共 {len(rows)} 条，无重复；{alert_text}")
+                self.monitor_message.configure(text=f"共 {len(all_rows)} 条，无重复；{alert_text}")
         except Exception as exc:
             logger.exception("刷新监控面板失败")
             self.monitor_message.configure(text=f"刷新失败：{exc}")
@@ -713,20 +743,10 @@ class MonitorApp:
         running = bool(self.worker and self.worker.is_alive())
         now = china_now().strftime("%Y-%m-%d %H:%M:%S")
         current = "运行中" if running else "已停止"
-        pending = 0
-        last_cycle = "尚无记录"
-        if self.service and running:
-            try:
-                pending = self.service.state.pending_excel_write_count()
-                stored = self.service.state.get_value("last_cycle_completed_at")
-                if stored:
-                    last_cycle = datetime.fromisoformat(stored).strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                pending = 0
         self.root.title(f"可转债监控控制台 - {current}")
         base_text = self.summary_label.cget("text").split("    北京时间")[0]
         self.summary_label.configure(
-            text=f"{base_text}    北京时间：{now}    上次完整轮询：{last_cycle}    Excel待写：{pending} 条"
+            text=f"{base_text}    北京时间：{now}    上次完整轮询：{self.last_cycle_text}    Excel待写：{self.pending_excel_count} 条"
         )
         if not self.quitting:
             self.root.after(1000, self._refresh_status)
@@ -897,9 +917,21 @@ class MonitorApp:
         self._post_ui(self._exit_main)
 
     def _exit_main(self) -> None:
+        if self.quitting:
+            return
         self.quitting = True
         if self.service:
             self.service.stop()
+        self.status_label.configure(text="● 正在安全退出", foreground="#c27c00")
+        self.root.after(50, self._poll_worker_exit, monotonic() + 5.0)
+
+    def _poll_worker_exit(self, deadline: float) -> None:
+        if self.worker and self.worker.is_alive() and monotonic() < deadline:
+            self.root.after(100, self._poll_worker_exit, deadline)
+            return
+        self._finish_exit()
+
+    def _finish_exit(self) -> None:
         if self.tray:
             self.tray.stop()
         logging.getLogger().removeHandler(self.log_handler)

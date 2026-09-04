@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 
@@ -20,3 +21,21 @@ def synchronized_path(function: F) -> F:
         with workbook_lock(path):
             return function(path, *args, **kwargs)
     return cast(F, wrapper)
+
+
+def replace_with_retry(temporary: Path, target: Path, attempts: int = 5) -> None:
+    for attempt in range(attempts):
+        try:
+            temporary.replace(target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.2 * (attempt + 1))
+
+
+def cleanup_temporary(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except PermissionError:
+        pass

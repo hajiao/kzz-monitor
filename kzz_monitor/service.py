@@ -217,19 +217,21 @@ class MonitorService:
         return load_configuration(self.workbook)
 
     def _run_open_cycle(self, settings: AppSettings, bonds: list[BondConfig]) -> bool:
+        quotes = self.provider.refresh_spot(self.now())
         for index, config in enumerate(bonds):
             if self.stop_event.is_set() or self._market_phase(self.now().time(), settings) != "open":
                 return False
-            self._process(config, settings)
+            self._process(config, settings, quotes)
             if index < len(bonds) - 1 and self._wait(settings.poll_interval_seconds):
                 return False
         return True
 
     def _run_complete_cycle(self, settings: AppSettings, bonds: list[BondConfig], wait_between: bool = True) -> bool:
+        quotes = self.provider.refresh_spot(self.now())
         for index, config in enumerate(bonds):
             if self.stop_event.is_set():
                 return False
-            self._process(config, settings)
+            self._process(config, settings, quotes)
             if wait_between and index < len(bonds) - 1:
                 if self._wait(settings.poll_interval_seconds):
                     return False
@@ -284,10 +286,16 @@ class MonitorService:
             if self._wait(min(30, remaining)):
                 return
 
-    def _process(self, config: BondConfig, settings: AppSettings) -> None:
+    def _process(
+        self,
+        config: BondConfig,
+        settings: AppSettings,
+        quotes: dict[str, Quote] | None = None,
+    ) -> None:
         try:
             self._flush_pending_excel_writes()
-            quotes = self.provider.refresh_spot(self.now())
+            if quotes is None:
+                quotes = self.provider.refresh_spot(self.now())
             quote = quotes.get(config.code)
             if quote is None:
                 cache_key = f"unavailable:{config.code}"
@@ -412,7 +420,9 @@ class MonitorService:
                 return
             except Exception:
                 logger.exception("补写 Excel 队列项目失败：%s", item_key)
-                return
+                self.state.fail_pending_excel_write(item_key, "载荷损坏或无法写入目标行", self.now())
+                logger.error("该项目已移入失败队列，继续补写后续项目：%s", item_key)
+                continue
         logger.info("Excel 待写队列补写完成：%d 条", completed)
 
     @staticmethod

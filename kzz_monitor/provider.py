@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -23,7 +24,8 @@ def _number(value: Any) -> float | None:
     try:
         if value is None or str(value).strip() in {"", "-", "--", "nan"}:
             return None
-        return float(str(value).replace("%", "").replace(",", ""))
+        result = float(str(value).replace("%", "").replace(",", ""))
+        return result if math.isfinite(result) else None
     except (TypeError, ValueError):
         return None
 
@@ -84,7 +86,7 @@ class AkShareProvider:
             price = _number(row[price_col])
             if not code or price is None or price <= 0:
                 continue
-            result[code] = Quote(
+            quote = Quote(
                 code=code,
                 name=str(row[name_col]) if name_col and row[name_col] is not None else "",
                 price=price,
@@ -95,6 +97,11 @@ class AkShareProvider:
                 conversion_price=_number(row[conversion_col]) if conversion_col else None,
                 redeem_status=str(row[redeem_col] or "未开始") if redeem_col else "",
             )
+            existing = result.get(code)
+            if existing is None or quote.timestamp >= existing.timestamp:
+                result[code] = quote
+            else:
+                logger.warning("实时行情包含重复代码 %s，保留较新的记录", code)
         return result
 
     def one_year_high(self, code: str, today: date | None = None) -> float:
@@ -104,9 +111,14 @@ class AkShareProvider:
         high_col = _find_column(frame.columns, "high", "最高")
         if not date_col or not high_col:
             raise ValueError(f"历史行情字段不兼容: {list(frame.columns)}")
+        frame = frame.copy()
+        frame[date_col] = frame[date_col].apply(
+            lambda value: value.date() if hasattr(value, "date") else date.fromisoformat(str(value)[:10])
+        )
+        frame.sort_values(date_col, inplace=True)
         dates = frame[date_col]
         cutoff = today - timedelta(days=365)
-        mask = dates.apply(lambda value: value.date() if hasattr(value, "date") else date.fromisoformat(str(value)[:10])) >= cutoff
+        mask = dates >= cutoff
         values = frame.loc[mask, high_col].apply(_number).dropna()
         if values.empty:
             raise ValueError(f"{code} 最近一年没有历史行情")
@@ -124,6 +136,11 @@ class AkShareProvider:
         close_col = _find_column(frame.columns, "close", "收盘")
         if not date_col or not close_col:
             return None
+        frame = frame.copy()
+        frame[date_col] = frame[date_col].apply(
+            lambda value: value.date() if hasattr(value, "date") else date.fromisoformat(str(value)[:10])
+        )
+        frame.sort_values(date_col, inplace=True)
         row = frame.iloc[-1]
         value = row[date_col]
         trade_date = value.date() if hasattr(value, "date") else date.fromisoformat(str(value)[:10])

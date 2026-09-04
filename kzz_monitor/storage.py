@@ -11,7 +11,7 @@ class StateStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._closed = False
-        self.connection = sqlite3.connect(path, check_same_thread=False, timeout=30)
+        self._connection = sqlite3.connect(path, check_same_thread=False, timeout=30)
         with self._lock:
             self.connection.execute("PRAGMA journal_mode=WAL")
             self.connection.execute("PRAGMA busy_timeout=30000")
@@ -44,6 +44,13 @@ class StateStore:
                 payload TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS failed_excel_writes (
+                item_key TEXT PRIMARY KEY,
+                item_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                error TEXT NOT NULL,
+                failed_at TEXT NOT NULL
+            );
             """
             )
             self.connection.commit()
@@ -51,8 +58,14 @@ class StateStore:
     def close(self) -> None:
         with self._lock:
             if not self._closed:
-                self.connection.close()
+                self._connection.close()
                 self._closed = True
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        if self._closed:
+            raise RuntimeError("状态数据库已经关闭")
+        return self._connection
 
     def add_price(self, code: str, timestamp: datetime, price: float) -> None:
         with self._lock:
@@ -139,6 +152,25 @@ class StateStore:
         with self._lock:
             self.connection.execute("DELETE FROM pending_excel_writes WHERE item_key=?", (item_key,))
             self.connection.commit()
+
+    def fail_pending_excel_write(self, item_key: str, error: str, now: datetime) -> None:
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT item_type, payload FROM pending_excel_writes WHERE item_key=?", (item_key,)
+            ).fetchone()
+            if row:
+                self.connection.execute(
+                    "INSERT OR REPLACE INTO failed_excel_writes"
+                    "(item_key, item_type, payload, error, failed_at) VALUES (?, ?, ?, ?, ?)",
+                    (item_key, row[0], row[1], error[:2000], now.isoformat(timespec="seconds")),
+                )
+                self.connection.execute("DELETE FROM pending_excel_writes WHERE item_key=?", (item_key,))
+                self.connection.commit()
+
+    def failed_excel_write_count(self) -> int:
+        with self._lock:
+            row = self.connection.execute("SELECT COUNT(*) FROM failed_excel_writes").fetchone()
+        return int(row[0]) if row else 0
 
     def pending_excel_write_count(self) -> int:
         with self._lock:

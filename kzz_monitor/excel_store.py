@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import logging
-import os
-import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,7 @@ from openpyxl.styles import PatternFill
 
 from .config import ALERTS_SHEET, BOND_HEADERS, BONDS_SHEET, normalize_code
 from .file_locks import workbook_lock
+from .file_locks import cleanup_temporary, replace_with_retry
 from .models import Evaluation, Quote
 
 logger = logging.getLogger(__name__)
@@ -206,6 +206,14 @@ class ExcelStore:
             for name in BOND_HEADERS[:11]:
                 if name in values:
                     sheet.cell(row_number, HEADER_INDEX[name], values[name])
+            for duplicate_row in reversed(matches[1:]):
+                for column in range(1, len(BOND_HEADERS) + 1):
+                    if (
+                        sheet.cell(row_number, column).value in (None, "")
+                        and sheet.cell(duplicate_row, column).value not in (None, "")
+                    ):
+                        sheet.cell(row_number, column, sheet.cell(duplicate_row, column).value)
+                sheet.delete_rows(duplicate_row)
             sheet.auto_filter.ref = f"A1:T{sheet.max_row}"
             self._safe_save(wb)
             return code, created
@@ -271,25 +279,14 @@ class ExcelStore:
         raise KeyError(f"监控列表中没有 {code}")
 
     def _safe_save(self, wb: Any) -> None:
-        temporary = self.path.with_name(f".{self.path.stem}.writing{self.path.suffix}")
+        temporary = self.path.with_name(
+            f".{self.path.stem}.{uuid.uuid4().hex}.writing{self.path.suffix}"
+        )
         try:
             wb.save(temporary)
-            for attempt in range(5):
-                try:
-                    os.replace(temporary, self.path)
-                    break
-                except PermissionError:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.2 * (attempt + 1))
+            replace_with_retry(temporary, self.path)
         except PermissionError as exc:
-            try:
-                temporary.unlink(missing_ok=True)
-            except PermissionError:
-                pass
+            cleanup_temporary(temporary)
             raise PermissionError(f"无法更新 {self.path.name}，请关闭正在打开的 Excel 文件") from exc
         finally:
-            try:
-                temporary.unlink(missing_ok=True)
-            except PermissionError:
-                pass
+            cleanup_temporary(temporary)

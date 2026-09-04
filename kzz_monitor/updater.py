@@ -8,14 +8,23 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import stat
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from pathlib import PurePosixPath
 from urllib.parse import urljoin, urlparse
 
 import requests
 
 from . import __version__
+
+MAX_ARCHIVE_ENTRIES = 5000
+MAX_SINGLE_FILE_SIZE = 750 * 1024 * 1024
+MAX_TOTAL_UNCOMPRESSED_SIZE = 1500 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 200
+MAX_MANIFEST_SIZE = 1024 * 1024
+MAX_DOWNLOAD_SIZE = 1024 * 1024 * 1024
 
 
 @dataclass(slots=True)
@@ -43,17 +52,33 @@ def _platform_key() -> str:
     raise RuntimeError("当前系统暂不支持自动更新")
 
 
-def _read_location(location: str, timeout: int = 20) -> bytes:
+def _read_location(location: str, timeout: int = 20, max_size: int = MAX_MANIFEST_SIZE) -> bytes:
     parsed = urlparse(location)
-    if parsed.scheme in {"http", "https"}:
-        response = requests.get(location, timeout=timeout)
-        response.raise_for_status()
-        return response.content
+    if parsed.scheme == "http":
+        raise ValueError("在线更新只允许 HTTPS；本地测试可使用文件路径或 file://")
+    if parsed.scheme == "https":
+        with requests.get(location, timeout=timeout, stream=True) as response:
+            response.raise_for_status()
+            if urlparse(response.url).scheme != "https":
+                raise ValueError("更新下载被重定向到非 HTTPS 地址")
+            length = int(response.headers.get("Content-Length", "0") or 0)
+            if length > max_size:
+                raise ValueError("更新下载超过安全大小限制")
+            result = bytearray()
+            for chunk in response.iter_content(1024 * 1024):
+                result.extend(chunk)
+                if len(result) > max_size:
+                    raise ValueError("更新下载超过安全大小限制")
+            return bytes(result)
     if parsed.scheme == "file":
         from urllib.request import url2pathname
 
-        return Path(url2pathname(parsed.path)).read_bytes()
-    return Path(location).expanduser().read_bytes()
+        path = Path(url2pathname(parsed.path))
+    else:
+        path = Path(location).expanduser()
+    if path.stat().st_size > max_size:
+        raise ValueError("更新下载超过安全大小限制")
+    return path.read_bytes()
 
 
 def _resolve_package_url(manifest_location: str, package_location: str) -> str:
@@ -67,7 +92,7 @@ def _resolve_package_url(manifest_location: str, package_location: str) -> str:
 def check_for_update(manifest_location: str) -> UpdateInfo | None:
     if not manifest_location.strip():
         return None
-    manifest = json.loads(_read_location(manifest_location).decode("utf-8-sig"))
+    manifest = json.loads(_read_location(manifest_location, max_size=MAX_MANIFEST_SIZE).decode("utf-8-sig"))
     latest = str(manifest["version"])
     if _version_tuple(latest) <= _version_tuple(__version__):
         return None
@@ -80,13 +105,40 @@ def check_for_update(manifest_location: str) -> UpdateInfo | None:
     )
 
 
-def _safe_extract(archive: Path, destination: Path) -> None:
+def _validate_archive(archive: Path) -> None:
     with zipfile.ZipFile(archive) as bundle:
-        root = destination.resolve()
-        for member in bundle.infolist():
-            target = (destination / member.filename).resolve()
-            if root not in target.parents and target != root:
+        members = bundle.infolist()
+        if len(members) > MAX_ARCHIVE_ENTRIES:
+            raise ValueError("更新包文件数量超过安全限制")
+        total_size = 0
+        targets: set[str] = set()
+        for member in members:
+            path = PurePosixPath(member.filename.replace("\\", "/"))
+            if path.is_absolute() or ".." in path.parts or (path.parts and ":" in path.parts[0]):
                 raise ValueError("更新包包含不安全路径")
+            normalized = "/".join(path.parts).casefold()
+            if normalized in targets:
+                raise ValueError("更新包包含重复目标路径")
+            targets.add(normalized)
+            if member.flag_bits & 0x1:
+                raise ValueError("更新包不能使用 ZIP 密码")
+            mode = (member.external_attr >> 16) & 0o170000
+            if mode == stat.S_IFLNK:
+                raise ValueError("更新包不能包含符号链接")
+            if member.file_size > MAX_SINGLE_FILE_SIZE:
+                raise ValueError("更新包单个文件超过安全限制")
+            total_size += member.file_size
+            if total_size > MAX_TOTAL_UNCOMPRESSED_SIZE:
+                raise ValueError("更新包解压总大小超过安全限制")
+            if member.file_size and (
+                member.compress_size == 0 or member.file_size / member.compress_size > MAX_COMPRESSION_RATIO
+            ):
+                raise ValueError("更新包压缩比异常，疑似压缩炸弹")
+
+
+def _safe_extract(archive: Path, destination: Path) -> None:
+    _validate_archive(archive)
+    with zipfile.ZipFile(archive) as bundle:
         bundle.extractall(destination)
 
 
@@ -95,7 +147,7 @@ def stage_and_launch_update(info: UpdateInfo, application_base: Path) -> None:
         raise RuntimeError("源码运行模式不能自动替换程序，请重新构建")
     staging = Path(tempfile.mkdtemp(prefix="KzzMonitor-update-"))
     archive = staging / "update.zip"
-    archive.write_bytes(_read_location(info.url, timeout=120))
+    archive.write_bytes(_read_location(info.url, timeout=120, max_size=MAX_DOWNLOAD_SIZE))
     actual_hash = hashlib.sha256(archive.read_bytes()).hexdigest().lower()
     if actual_hash != info.sha256:
         shutil.rmtree(staging, ignore_errors=True)
@@ -103,6 +155,7 @@ def stage_and_launch_update(info: UpdateInfo, application_base: Path) -> None:
     payload = staging / "payload"
     payload.mkdir()
     if sys.platform == "darwin":
+        _validate_archive(archive)
         subprocess.run(["ditto", "-x", "-k", str(archive), str(payload)], check=True)
     else:
         _safe_extract(archive, payload)
