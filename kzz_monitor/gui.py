@@ -55,6 +55,7 @@ class MonitorApp:
         self.worker: threading.Thread | None = None
         self.quitting = False
         self.messages: queue.Queue[str] = queue.Queue()
+        self.ui_actions: queue.Queue[tuple[Any, tuple[Any, ...]]] = queue.Queue()
         self.log_handler = QueueLogHandler(self.messages)
         logging.getLogger().addHandler(self.log_handler)
         self.tray: pystray.Icon | None = None
@@ -62,6 +63,8 @@ class MonitorApp:
         self.bond_vars: dict[str, tk.Variable] = {}
         self.excel_store = ExcelStore(workbook)
         self.monitor_refresh_job: str | None = None
+        self.monitor_refresh_in_progress = False
+        self.monitor_rows_by_code: dict[str, dict[str, Any]] = {}
         self.only_alerts_var = tk.BooleanVar(value=False)
         self.update_check_job: str | None = None
         self.update_check_in_progress = False
@@ -74,6 +77,7 @@ class MonitorApp:
         self._load_settings()
         self._start_tray()
         self.root.after(200, self._drain_logs)
+        self.root.after(100, self._drain_ui_actions)
         self.root.after(500, self.start_monitor)
         self.root.after(1000, self._refresh_status)
         self.root.after(1200, self.refresh_monitor_table)
@@ -281,9 +285,36 @@ class MonitorApp:
             except tk.TclError:
                 pass
             self.monitor_refresh_job = None
+        if self.monitor_refresh_in_progress:
+            return
+        self.monitor_refresh_in_progress = True
+        threading.Thread(
+            target=self._load_monitor_rows_worker,
+            daemon=True,
+            name="KzzMonitorTableReader",
+        ).start()
+
+    def _load_monitor_rows_worker(self) -> None:
         try:
             rows = self.excel_store.list_bonds()
+            self._post_ui(self._apply_monitor_rows, rows, None)
+        except PermissionError:
+            self._post_ui(self._apply_monitor_rows, [], "工作簿正在被外部 Excel 占用，稍后再刷新")
+        except Exception as exc:
+            logger.exception("刷新监控面板失败")
+            self._post_ui(self._apply_monitor_rows, [], f"刷新失败：{exc}")
+
+    def _apply_monitor_rows(self, rows: list[dict[str, Any]], error: str | None) -> None:
+        self.monitor_refresh_in_progress = False
+        if error:
+            self.monitor_message.configure(text=error)
+            self._schedule_monitor_refresh()
+            return
+        try:
             selected_code = str(self.bond_vars["转债代码"].get()) if self.bond_vars else ""
+            self.monitor_rows_by_code = {
+                str(row.get("转债代码") or ""): row for row in reversed(rows)
+            }
             for item in self.monitor_tree.get_children():
                 self.monitor_tree.delete(item)
             counts: dict[str, int] = {}
@@ -315,14 +346,32 @@ class MonitorApp:
             else:
                 alert_text = "，".join(f"{name}{count}" for name, count in alert_counts.items()) or "无提醒"
                 self.monitor_message.configure(text=f"共 {len(rows)} 条，无重复；{alert_text}")
-        except PermissionError:
-            self.monitor_message.configure(text="工作簿正在被外部 Excel 占用，稍后再刷新")
         except Exception as exc:
             logger.exception("刷新监控面板失败")
             self.monitor_message.configure(text=f"刷新失败：{exc}")
         finally:
-            if not self.quitting:
-                self.monitor_refresh_job = self.root.after(5000, self.refresh_monitor_table)
+            self._schedule_monitor_refresh()
+
+    def _schedule_monitor_refresh(self) -> None:
+        if not self.quitting:
+            self.monitor_refresh_job = self.root.after(5000, self.refresh_monitor_table)
+
+    def _post_ui(self, callback: Any, *args: Any) -> None:
+        if not self.quitting:
+            self.ui_actions.put((callback, args))
+
+    def _drain_ui_actions(self) -> None:
+        while True:
+            try:
+                callback, args = self.ui_actions.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                callback(*args)
+            except Exception:
+                logger.exception("处理后台界面事件失败")
+        if not self.quitting:
+            self.root.after(100, self._drain_ui_actions)
 
     def _load_selected_bond(self, _event: object = None) -> None:
         selection = self.monitor_tree.selection()
@@ -331,12 +380,8 @@ class MonitorApp:
         values = self.monitor_tree.item(selection[0], "values")
         columns = list(self.monitor_tree["columns"])
         row = dict(zip(columns, values))
-        try:
-            source = next(
-                item for item in self.excel_store.list_bonds()
-                if str(item.get("转债代码") or "") == str(row.get("转债代码") or "")
-            )
-        except (StopIteration, PermissionError):
+        source = self.monitor_rows_by_code.get(str(row.get("转债代码") or ""))
+        if source is None:
             return
         for key, variable in self.bond_vars.items():
             value = source.get(key)
@@ -495,8 +540,7 @@ class MonitorApp:
         self._update_tray_menu()
 
     def _service_status(self, state: str, message: str) -> None:
-        if not self.quitting:
-            self.root.after(0, self._apply_service_status, state, message)
+        self._post_ui(self._apply_service_status, state, message)
 
     def _apply_service_status(self, state: str, message: str) -> None:
         labels = {
@@ -520,7 +564,7 @@ class MonitorApp:
             logger.exception("监控线程异常退出")
         finally:
             if not self.quitting:
-                self.root.after(0, self._mark_stopped)
+                self._post_ui(self._mark_stopped)
 
     def stop_monitor(self) -> None:
         if self.service:
@@ -679,12 +723,12 @@ class MonitorApp:
     def _check_updates_worker(self, location: str, silent_when_current: bool, automatic: bool) -> None:
         try:
             info = check_for_update(location)
-            self.root.after(0, self._show_update_result, info, silent_when_current, automatic)
+            self._post_ui(self._show_update_result, info, silent_when_current, automatic)
         except Exception as exc:
             logger.exception("检查更新失败")
             if not silent_when_current:
-                self.root.after(0, messagebox.showerror, "检查更新失败", str(exc))
-            self.root.after(0, self._finish_update_check)
+                self._post_ui(messagebox.showerror, "检查更新失败", str(exc))
+            self._post_ui(self._finish_update_check)
 
     def _finish_update_check(self) -> None:
         self.update_check_in_progress = False
@@ -719,10 +763,10 @@ class MonitorApp:
     def _install_update_worker(self, info: UpdateInfo) -> None:
         try:
             stage_and_launch_update(info, self.state_path.parent.parent)
-            self.root.after(0, self._exit_main)
+            self._post_ui(self._exit_main)
         except Exception as exc:
             logger.exception("安装更新失败")
-            self.root.after(0, messagebox.showerror, "安装更新失败", str(exc))
+            self._post_ui(messagebox.showerror, "安装更新失败", str(exc))
 
     def hide_window(self) -> None:
         self.root.withdraw()
@@ -747,7 +791,7 @@ class MonitorApp:
             self.hide_window()
 
     def show_window(self, *_: object) -> None:
-        self.root.after(0, self._show_window_main)
+        self._post_ui(self._show_window_main)
 
     def _show_window_main(self) -> None:
         self.root.deiconify()
@@ -755,7 +799,7 @@ class MonitorApp:
         self.root.focus_force()
 
     def exit_app(self, *_: object) -> None:
-        self.root.after(0, self._exit_main)
+        self._post_ui(self._exit_main)
 
     def _exit_main(self) -> None:
         self.quitting = True
@@ -769,11 +813,11 @@ class MonitorApp:
     def _start_tray(self) -> None:
         menu = pystray.Menu(
             pystray.MenuItem("显示控制台", self.show_window, default=True),
-            pystray.MenuItem("启动监控", lambda *_: self.root.after(0, self.start_monitor)),
-            pystray.MenuItem("停止监控", lambda *_: self.root.after(0, self.stop_monitor)),
-            pystray.MenuItem("立即强制新一轮", lambda *_: self.root.after(0, self.force_cycle)),
-            pystray.MenuItem("刷新安道全", lambda *_: self.root.after(0, self.refresh_adq)),
-            pystray.MenuItem("检查更新", lambda *_: self.root.after(0, self.check_updates)),
+            pystray.MenuItem("启动监控", lambda *_: self._post_ui(self.start_monitor)),
+            pystray.MenuItem("停止监控", lambda *_: self._post_ui(self.stop_monitor)),
+            pystray.MenuItem("立即强制新一轮", lambda *_: self._post_ui(self.force_cycle)),
+            pystray.MenuItem("刷新安道全", lambda *_: self._post_ui(self.refresh_adq)),
+            pystray.MenuItem("检查更新", lambda *_: self._post_ui(self.check_updates)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("退出 KzzMonitor", self.exit_app),
         )

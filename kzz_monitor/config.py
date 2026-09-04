@@ -19,7 +19,7 @@ BONDS_SHEET = "监控列表"
 ALERTS_SHEET = "提醒记录"
 GUIDE_SHEET = "使用说明"
 PARAMETERS_SHEET = "参数说明"
-WORKBOOK_SCHEMA_VERSION = "1.2.4"
+WORKBOOK_SCHEMA_VERSION = "1.2.5"
 DEFAULT_UPDATE_MANIFEST_URL = (
     "https://github.com/hajiao/kzz-monitor/releases/latest/download/update-manifest.json"
 )
