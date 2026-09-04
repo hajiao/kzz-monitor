@@ -19,7 +19,7 @@ BONDS_SHEET = "监控列表"
 ALERTS_SHEET = "提醒记录"
 GUIDE_SHEET = "使用说明"
 PARAMETERS_SHEET = "参数说明"
-WORKBOOK_SCHEMA_VERSION = "1.2.0"
+WORKBOOK_SCHEMA_VERSION = "1.2.1"
 DEFAULT_UPDATE_MANIFEST_URL = (
     "https://github.com/hajiao/kzz-monitor/releases/latest/download/update-manifest.json"
 )
@@ -102,6 +102,7 @@ PARAMETER_ROWS = [
     ("更新清单地址", "HTTPS/共享路径", "指向 update-manifest.json；更新只替换程序和手册，不覆盖用户 Excel、data 或 logs。"),
     ("Excel 待写队列", "自动", "Excel 被打开占用时，结果和提醒持久化到 data/monitor.db；下一次轮询自动重试。"),
     ("重复代码", "自动拦截", "新增相同代码会更新已有行；既有重复行本轮只处理第一行，可点击“合并重复项”。"),
+    ("启用为空", "默认 TRUE", "只要代码有效，启用单元格为空时也按启用处理并写日志；明确 FALSE 才停用。"),
 ]
 
 SETTING_DESCRIPTIONS = {
@@ -120,6 +121,14 @@ def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "y", "是", "启用"}
+
+
+def _as_enabled(value: Any, code: str) -> bool:
+    """有代码但启用为空时默认启用；明确 FALSE 才停用。"""
+    if value is None or str(value).strip() == "":
+        logger.warning("转债 %s 的“启用”为空，按已启用处理；如需停用请明确填写 FALSE", code)
+        return True
+    return _as_bool(value)
 
 
 def _float(value: Any) -> float | None:
@@ -314,7 +323,7 @@ def load_configuration(path: Path) -> tuple[AppSettings, list[BondConfig]]:
         for row in range(2, sheet.max_row + 1):
             get = lambda name: sheet.cell(row, headers[name]).value  # noqa: E731
             code = normalize_code(get("转债代码"))
-            if not code or not _as_bool(get("启用")):
+            if not code or not _as_enabled(get("启用"), code):
                 continue
             if code in seen_codes:
                 logger.warning("监控列表存在重复转债 %s；本轮跳过重复行，可在监控面板一键合并", code)

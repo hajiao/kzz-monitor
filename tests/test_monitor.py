@@ -254,3 +254,14 @@ def test_monitor_crud_rejects_invalid_lines(tmp_path):
             "回撤提醒%": 5, "趋势窗口": 3, "趋势最小跌幅": 0.1,
             "建仓线": 110, "加仓线": 115, "重仓线": 100,
         })
+
+
+def test_blank_enabled_cell_defaults_to_enabled(tmp_path):
+    workbook = tmp_path / "monitor.xlsx"
+    create_workbook(workbook, ["127049"])
+    wb = load_workbook(workbook)
+    wb["监控列表"]["A2"] = None
+    wb.save(workbook)
+    wb.close()
+    _, bonds = load_configuration(workbook)
+    assert [bond.code for bond in bonds] == ["127049"]

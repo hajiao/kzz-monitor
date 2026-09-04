@@ -197,6 +197,7 @@ class ExcelStore:
             row_number = matches[0] if matches else sheet.max_row + 1
             values = dict(values)
             values["转债代码"] = code
+            values["启用"] = True if values.get("启用") in (None, "") else bool(values["启用"])
             values.update({
                 "卖出观察价": sell_trigger, "回撤提醒%": drawdown,
                 "趋势窗口": trend_window, "趋势最小跌幅": epsilon,
