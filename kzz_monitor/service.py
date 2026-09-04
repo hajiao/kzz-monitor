@@ -28,9 +28,7 @@ class AlertEngine:
         self.state.add_price(config.code, quote.timestamp, quote.price)
         prices = self.state.recent_prices(config.code, config.trend_window)
         trend = self._trend(prices, config.trend_epsilon)
-        peak = max(self.state.monitored_peak(config.code), quote.price)
         one_year_high = max(historical_high, quote.price)
-        drawdown = max(0.0, (peak - quote.price) / peak * 100) if peak else 0.0
         zone = self._zone(config, quote.price)
         messages: list[str] = []
 
@@ -40,20 +38,77 @@ class AlertEngine:
             messages.append(f"进入{zone}：现价 {quote.price:.2f}")
         self.state.set_value(zone_key, zone)
 
-        latch_key = f"sell_latched:{config.code}"
-        latched = self.state.get_value(latch_key, "0") == "1"
-        armed = peak >= config.sell_trigger_price
-        sell_alert = armed and trend == Trend.DOWN and drawdown >= config.sell_drawdown_pct
-        if latched and drawdown <= config.sell_drawdown_pct * 0.4:
-            latched = False
-            self.state.set_value(latch_key, "0")
-        if sell_alert and not latched:
+        peak, drawdown, sell_alert, sell_fired = self._evaluate_sell_wave(config, quote.price, trend)
+        if sell_fired:
             messages.append(
-                f"卖出观察：峰值 {peak:.2f} 已超过观察价 {config.sell_trigger_price:.2f}，"
+                f"卖出观察：本波段峰值 {peak:.2f} 已超过观察价 {config.sell_trigger_price:.2f}，"
                 f"当前 {quote.price:.2f}，趋势下降，回撤 {drawdown:.2f}%"
             )
-            self.state.set_value(latch_key, "1")
         return Evaluation(trend, one_year_high, peak, drawdown, zone, sell_alert, messages)
+
+    def _evaluate_sell_wave(
+        self, config: BondConfig, price: float, trend: Trend
+    ) -> tuple[float, float, bool, bool]:
+        code = config.code
+        version_key = f"sell_wave_version:{code}"
+        state_key = f"sell_wave_state:{code}"
+        peak_key = f"sell_wave_peak:{code}"
+        declining_key = f"sell_wave_declining:{code}"
+        latch_key = f"sell_latched:{code}"
+
+        if self.state.get_value(version_key) != "2":
+            # 旧版锁定基于永久历史峰值，不能沿用到波段逻辑。
+            self.state.set_value(version_key, "2")
+            self.state.set_value(state_key, "idle")
+            self.state.set_value(peak_key, "0")
+            self.state.set_value(declining_key, "0")
+            self.state.set_value(latch_key, "0")
+
+        wave_state = self.state.get_value(state_key, "idle")
+        try:
+            wave_peak = float(self.state.get_value(peak_key, "0"))
+        except ValueError:
+            wave_peak = 0.0
+        declining = self.state.get_value(declining_key, "0") == "1"
+
+        if wave_state == "alerted":
+            if trend == Trend.UP:
+                if price >= config.sell_trigger_price:
+                    wave_state, wave_peak = "armed", price
+                else:
+                    wave_state, wave_peak = "idle", 0.0
+                declining = False
+                self.state.set_value(latch_key, "0")
+        elif wave_state == "idle":
+            if price >= config.sell_trigger_price:
+                wave_state, wave_peak, declining = "armed", price, False
+        elif wave_state == "armed":
+            wave_peak = max(wave_peak, price)
+            if trend == Trend.DOWN:
+                declining = True
+            elif trend == Trend.UP and declining and price < config.sell_trigger_price:
+                # 已跌离合格峰值后形成低位新上升波段，旧波段结束。
+                wave_state, wave_peak, declining = "idle", 0.0, False
+
+        drawdown = (
+            max(0.0, (wave_peak - price) / wave_peak * 100)
+            if wave_state in {"armed", "alerted"} and wave_peak > 0 else 0.0
+        )
+        fired = bool(
+            wave_state == "armed"
+            and trend == Trend.DOWN
+            and drawdown >= config.sell_drawdown_pct
+        )
+        if fired:
+            wave_state = "alerted"
+            declining = True
+            self.state.set_value(latch_key, "1")
+
+        self.state.set_value(state_key, wave_state)
+        self.state.set_value(peak_key, str(wave_peak))
+        self.state.set_value(declining_key, "1" if declining else "0")
+        active = wave_state == "alerted"
+        return wave_peak, drawdown, active, fired
 
     @staticmethod
     def _trend(prices: list[float], epsilon: float) -> Trend:

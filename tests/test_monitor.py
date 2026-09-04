@@ -42,6 +42,49 @@ def test_sell_alert_requires_arming_downtrend_and_drawdown(tmp_path):
     state.close()
 
 
+def test_old_qualified_peak_does_not_arm_later_low_peak(tmp_path):
+    state = StateStore(tmp_path / "state.db")
+    engine = AlertEngine(state)
+    config = BondConfig(
+        "127015", sell_trigger_price=130, sell_drawdown_pct=5,
+        trend_window=2, trend_epsilon=0.1,
+    )
+    assert not engine.evaluate(config, quote(140, 0), 145).sell_alert
+    first_alert = engine.evaluate(config, quote(132, 1), 145)
+    assert first_alert.sell_alert
+    assert first_alert.monitored_peak == 140
+
+    # 旧波段继续下跌时保持锁定，但不重复发送提醒。
+    continuing = engine.evaluate(config, quote(120, 2), 145)
+    assert continuing.sell_alert
+    assert continuing.alert_messages == []
+
+    # 低于观察价的新上升波段结束旧波段并解除锁定。
+    rebound = engine.evaluate(config, quote(121, 3), 145)
+    assert not rebound.sell_alert
+    assert rebound.monitored_peak == 0
+
+    # 新局部峰值没有达到 130，随后下降不得借用旧峰 140 提醒。
+    low_peak_decline = engine.evaluate(config, quote(119, 4), 145)
+    assert low_peak_decline.trend == Trend.DOWN
+    assert not low_peak_decline.sell_alert
+    assert low_peak_decline.alert_messages == []
+    assert low_peak_decline.monitored_peak == 0
+    state.close()
+
+
+def test_sell_wave_migration_clears_legacy_permanent_peak_latch(tmp_path):
+    state = StateStore(tmp_path / "state.db")
+    state.set_value("sell_latched:127015", "1")
+    engine = AlertEngine(state)
+    config = BondConfig("127015", sell_trigger_price=130, sell_drawdown_pct=5, trend_window=2)
+    result = engine.evaluate(config, quote(120, 0), 150)
+    assert not result.sell_alert
+    assert state.get_value("sell_latched:127015") == "0"
+    assert state.get_value("sell_wave_state:127015") == "idle"
+    state.close()
+
+
 def test_position_zone_only_alerts_when_moving_deeper(tmp_path):
     state = StateStore(tmp_path / "state.db")
     engine = AlertEngine(state)
