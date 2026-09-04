@@ -18,6 +18,7 @@ from . import __version__
 from .clock import china_now
 from .config import load_configuration, update_settings
 from .excel_store import ExcelStore
+from .monitor_view import classify_bond_row
 from .notifier import Notifier
 from .platform_utils import open_path
 from .secrets import load_secret, save_secret
@@ -61,6 +62,7 @@ class MonitorApp:
         self.bond_vars: dict[str, tk.Variable] = {}
         self.excel_store = ExcelStore(workbook)
         self.monitor_refresh_job: str | None = None
+        self.only_alerts_var = tk.BooleanVar(value=False)
         self.update_check_job: str | None = None
         self.update_check_in_progress = False
 
@@ -181,15 +183,30 @@ class MonitorApp:
         scroll.pack(side="right", fill="y")
 
     def _build_monitor_page(self, parent: ttk.Frame) -> None:
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill="x", pady=(0, 7))
+        legend = (
+            ("卖出观察", "#B91C1C", "#FFFFFF"), ("重仓区", "#6D28D9", "#FFFFFF"),
+            ("加仓区", "#F59E0B", "#1F2937"), ("建仓区", "#FDE68A", "#1F2937"),
+            ("强赎关注", "#F9A8D4", "#4A044E"), ("无实时行情", "#D1D5DB", "#374151"),
+        )
+        ttk.Label(toolbar, text="颜色图例：").pack(side="left")
+        for text, background, foreground in legend:
+            tk.Label(toolbar, text=f" {text} ", bg=background, fg=foreground, padx=4).pack(side="left", padx=2)
+        ttk.Checkbutton(
+            toolbar, text="仅看提醒", variable=self.only_alerts_var,
+            command=self.refresh_monitor_table,
+        ).pack(side="right")
+
         columns = (
-            "启用", "转债代码", "名称", "当前价", "趋势", "近一年最高价", "监控峰值",
+            "启用", "转债代码", "名称", "提醒状态", "当前价", "趋势", "近一年最高价", "监控峰值",
             "回撤%", "仓位区域", "建仓线", "加仓线", "重仓线", "当周评价", "最近更新",
             "强赎状态", "运行说明",
         )
         table_frame = ttk.Frame(parent)
         table_frame.pack(fill="both", expand=True)
         self.monitor_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=16)
-        widths = {"启用": 55, "转债代码": 85, "名称": 100, "当前价": 75, "趋势": 70,
+        widths = {"启用": 55, "转债代码": 85, "名称": 100, "提醒状态": 90, "当前价": 75, "趋势": 70,
                   "近一年最高价": 105, "监控峰值": 90, "回撤%": 70, "仓位区域": 80,
                   "建仓线": 75, "加仓线": 75, "重仓线": 75, "当周评价": 90, "最近更新": 145,
                   "强赎状态": 130, "运行说明": 260}
@@ -199,6 +216,14 @@ class MonitorApp:
         vertical = ttk.Scrollbar(table_frame, orient="vertical", command=self.monitor_tree.yview)
         horizontal = ttk.Scrollbar(table_frame, orient="horizontal", command=self.monitor_tree.xview)
         self.monitor_tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.monitor_tree.tag_configure("sell", background="#B91C1C", foreground="#FFFFFF")
+        self.monitor_tree.tag_configure("heavy", background="#6D28D9", foreground="#FFFFFF")
+        self.monitor_tree.tag_configure("add", background="#F59E0B", foreground="#1F2937")
+        self.monitor_tree.tag_configure("build", background="#FDE68A", foreground="#1F2937")
+        self.monitor_tree.tag_configure("redeem", background="#F9A8D4", foreground="#4A044E")
+        self.monitor_tree.tag_configure("unavailable", background="#D1D5DB", foreground="#374151")
+        self.monitor_tree.tag_configure("normal-even", background="#FFFFFF", foreground="#17202A")
+        self.monitor_tree.tag_configure("normal-odd", background="#EEF6FF", foreground="#17202A")
         self.monitor_tree.grid(row=0, column=0, sticky="nsew")
         vertical.grid(row=0, column=1, sticky="ns")
         horizontal.grid(row=1, column=0, sticky="ew")
@@ -262,12 +287,25 @@ class MonitorApp:
             for item in self.monitor_tree.get_children():
                 self.monitor_tree.delete(item)
             counts: dict[str, int] = {}
+            alert_counts: dict[str, int] = {}
             columns = self.monitor_tree["columns"]
             for index, row in enumerate(rows):
                 code = str(row.get("转债代码") or "")
                 counts[code] = counts.get(code, 0) + 1
-                values = [self._display_cell(row.get(column)) for column in columns]
-                item = self.monitor_tree.insert("", "end", iid=f"row-{index}", values=values)
+                sell_latched = False
+                if self.service:
+                    sell_latched = self.service.state.get_value(f"sell_latched:{code}", "0") == "1"
+                visual = classify_bond_row(row, sell_latched)
+                if self.only_alerts_var.get() and not visual.is_alert:
+                    continue
+                if visual.is_alert:
+                    alert_counts[visual.label] = alert_counts.get(visual.label, 0) + 1
+                values = [
+                    visual.label if column == "提醒状态" else self._display_cell(row.get(column))
+                    for column in columns
+                ]
+                tag = visual.key if visual.key != "normal" else f"normal-{'even' if index % 2 == 0 else 'odd'}"
+                item = self.monitor_tree.insert("", "end", iid=f"row-{index}", values=values, tags=(tag,))
                 if code == selected_code:
                     self.monitor_tree.selection_set(item)
             duplicates = {code: count for code, count in counts.items() if count > 1}
@@ -275,7 +313,8 @@ class MonitorApp:
                 detail = "，".join(f"{code}×{count}" for code, count in duplicates.items())
                 self.monitor_message.configure(text=f"发现重复：{detail}；轮询只处理首行")
             else:
-                self.monitor_message.configure(text=f"共 {len(rows)} 条，无重复代码")
+                alert_text = "，".join(f"{name}{count}" for name, count in alert_counts.items()) or "无提醒"
+                self.monitor_message.configure(text=f"共 {len(rows)} 条，无重复；{alert_text}")
         except PermissionError:
             self.monitor_message.configure(text="工作簿正在被外部 Excel 占用，稍后再刷新")
         except Exception as exc:

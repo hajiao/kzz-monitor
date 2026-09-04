@@ -12,6 +12,7 @@ from kzz_monitor.config import AppSettings, BondConfig, normalize_code
 from kzz_monitor.config import create_workbook, load_configuration, migrate_workbook
 from kzz_monitor.excel_store import ExcelStore
 from kzz_monitor.models import Evaluation, Quote, Trend
+from kzz_monitor.monitor_view import classify_bond_row
 from kzz_monitor.provider import exchange_symbol
 from kzz_monitor.service import AlertEngine, MonitorService
 from kzz_monitor.storage import StateStore
@@ -274,3 +275,19 @@ def test_update_schedule_defaults_and_minimum(tmp_path):
     assert settings.check_updates_on_startup is True
     assert settings.update_check_interval_hours == 24
     assert settings.auto_install_updates is False
+
+
+def test_monitor_visual_alert_priority_and_contrast_states():
+    base = {
+        "当前价": 120, "监控峰值": 140, "卖出观察价": 130,
+        "回撤%": 14.2, "回撤提醒%": 5, "趋势": "下降",
+        "仓位区域": "重仓", "强赎状态": "已公告强赎",
+    }
+    assert classify_bond_row(base).key == "sell"
+    assert classify_bond_row({**base, "趋势": "震荡"}).key == "heavy"
+    assert classify_bond_row({**base, "趋势": "震荡", "仓位区域": "加仓"}).key == "add"
+    assert classify_bond_row({**base, "趋势": "震荡", "仓位区域": "建仓"}).key == "build"
+    assert classify_bond_row({**base, "趋势": "震荡", "仓位区域": "观察"}).key == "redeem"
+    assert classify_bond_row({**base, "趋势": "无实时行情"}).key == "unavailable"
+    assert classify_bond_row({"趋势": "震荡", "强赎状态": "未开始"}).key == "normal"
+    assert classify_bond_row({"趋势": "震荡"}, sell_latched=True).key == "sell"

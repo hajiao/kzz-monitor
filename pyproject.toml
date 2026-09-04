@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kzz-monitor"
-version = "1.2.3"
+version = "1.2.4"
 description = "低频可转债监控、Excel 面板和多渠道提醒"
 requires-python = ">=3.10"
 dependencies = [
