@@ -61,6 +61,8 @@ class MonitorApp:
         self.bond_vars: dict[str, tk.Variable] = {}
         self.excel_store = ExcelStore(workbook)
         self.monitor_refresh_job: str | None = None
+        self.update_check_job: str | None = None
+        self.update_check_in_progress = False
 
         self.root.title("可转债监控控制台")
         self.root.geometry("980x720")
@@ -119,6 +121,8 @@ class MonitorApp:
             ("SMTP授权码", "SMTP 授权码", "password"),
             ("更新清单地址", "更新清单地址", "entry"),
             ("启动时检查更新", "启动时检查更新", "check"),
+            ("更新检查间隔小时", "更新检查间隔（小时）", "entry"),
+            ("自动安装更新", "自动安装更新", "check"),
         ]
         for index, (key, label, kind) in enumerate(definitions):
             row, pair = divmod(index, 2)
@@ -377,6 +381,8 @@ class MonitorApp:
             "SMTP授权码": load_secret(self.state_path.parent / "smtp_secret.bin"),
             "更新清单地址": settings.update_manifest_url,
             "启动时检查更新": settings.check_updates_on_startup,
+            "更新检查间隔小时": settings.update_check_interval_hours,
+            "自动安装更新": settings.auto_install_updates,
         }
         for key, value in values.items():
             self.vars[key].set(value)
@@ -391,16 +397,19 @@ class MonitorApp:
         try:
             interval = max(10, int(str(self.vars["轮询间隔秒"].get()).strip()))
             cycle_interval = max(1, int(str(self.vars["整轮间隔分钟"].get()).strip()))
+            update_interval = max(1, int(str(self.vars["更新检查间隔小时"].get()).strip()))
             for key in ("开盘时间", "午间休市开始", "午间休市结束", "收盘时间"):
                 datetime.strptime(str(self.vars[key].get()).strip(), "%H:%M")
             values = {key: variable.get() for key, variable in self.vars.items()}
             values["轮询间隔秒"] = interval
             values["整轮间隔分钟"] = cycle_interval
+            values["更新检查间隔小时"] = update_interval
             password = str(values.pop("SMTP授权码", ""))
             values["SMTP端口"] = int(str(values["SMTP端口"]).strip())
             update_settings(self.workbook, values)
             save_secret(self.state_path.parent / "smtp_secret.bin", password)
             self._load_settings()
+            self._schedule_periodic_update_check(update_interval)
             self._append_log("设置已保存；后台将在下一轮重新读取。")
             return True
         except PermissionError:
@@ -580,49 +589,86 @@ class MonitorApp:
         try:
             settings, _ = load_configuration(self.workbook)
             if settings.check_updates_on_startup and settings.update_manifest_url:
-                self.check_updates(silent_when_current=True)
+                self.check_updates(silent_when_current=True, automatic=True)
+            self._schedule_periodic_update_check(settings.update_check_interval_hours)
         except Exception:
             logger.exception("启动时检查更新失败")
 
-    def check_updates(self, silent_when_current: bool = False) -> None:
+    def _schedule_periodic_update_check(self, hours: int) -> None:
+        if self.update_check_job is not None:
+            try:
+                self.root.after_cancel(self.update_check_job)
+            except tk.TclError:
+                pass
+        self.update_check_job = self.root.after(
+            max(1, hours) * 60 * 60 * 1000, self._periodic_update_check
+        )
+
+    def _periodic_update_check(self) -> None:
+        self.update_check_job = None
         try:
+            settings, _ = load_configuration(self.workbook)
+            if settings.update_manifest_url:
+                self.check_updates(silent_when_current=True, automatic=True)
+            self._schedule_periodic_update_check(settings.update_check_interval_hours)
+        except Exception:
+            logger.exception("周期检查更新失败")
+            self._schedule_periodic_update_check(1)
+
+    def check_updates(self, silent_when_current: bool = False, automatic: bool = False) -> None:
+        try:
+            if self.update_check_in_progress:
+                if not silent_when_current:
+                    messagebox.showinfo("检查更新", "更新检查正在进行中。")
+                return
             location = str(self.vars["更新清单地址"].get()).strip()
             if not location:
                 if not silent_when_current:
                     messagebox.showinfo("检查更新", "请先填写“更新清单地址”并保存设置。")
                 return
             self._append_log("正在检查程序更新……")
+            self.update_check_in_progress = True
             threading.Thread(
                 target=self._check_updates_worker,
-                args=(location, silent_when_current),
+                args=(location, silent_when_current, automatic),
                 daemon=True,
                 name="KzzUpdateChecker",
             ).start()
         except Exception as exc:
             messagebox.showerror("检查更新失败", str(exc))
 
-    def _check_updates_worker(self, location: str, silent_when_current: bool) -> None:
+    def _check_updates_worker(self, location: str, silent_when_current: bool, automatic: bool) -> None:
         try:
             info = check_for_update(location)
-            self.root.after(0, self._show_update_result, info, silent_when_current)
+            self.root.after(0, self._show_update_result, info, silent_when_current, automatic)
         except Exception as exc:
             logger.exception("检查更新失败")
-            self.root.after(0, messagebox.showerror, "检查更新失败", str(exc))
+            if not silent_when_current:
+                self.root.after(0, messagebox.showerror, "检查更新失败", str(exc))
+            self.root.after(0, self._finish_update_check)
 
-    def _show_update_result(self, info: UpdateInfo | None, silent_when_current: bool) -> None:
+    def _finish_update_check(self) -> None:
+        self.update_check_in_progress = False
+
+    def _show_update_result(self, info: UpdateInfo | None, silent_when_current: bool, automatic: bool) -> None:
+        self._finish_update_check()
         if info is None:
             self._append_log(f"当前已是最新版本 v{__version__}。")
             if not silent_when_current:
                 messagebox.showinfo("检查更新", f"当前已是最新版本 v{__version__}。")
             return
         notes = f"\n\n更新说明：\n{info.notes}" if info.notes else ""
-        install = messagebox.askyesno(
-            "发现新版本",
-            f"当前版本：v{__version__}\n新版本：v{info.version}{notes}\n\n"
-            "是否立即下载并安装？程序会自动退出、替换并重启；Excel、data 和 logs 不会被覆盖。",
-        )
+        settings, _ = load_configuration(self.workbook)
+        auto_install = automatic and settings.auto_install_updates
+        install = auto_install or messagebox.askyesno(
+                "发现新版本",
+                f"当前版本：v{__version__}\n新版本：v{info.version}{notes}\n\n"
+                "是否立即下载并安装？程序会自动退出、替换并重启；Excel、data 和 logs 不会被覆盖。",
+            )
         if not install:
             return
+        if auto_install:
+            self._append_log(f"发现 v{info.version}，已启用自动安装。")
         self._append_log(f"正在下载并校验 v{info.version} 更新包……")
         threading.Thread(
             target=self._install_update_worker,

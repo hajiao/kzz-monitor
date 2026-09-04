@@ -277,6 +277,16 @@ blockquote{margin:18px 0;padding:12px 18px;border-left:5px solid #e49b26;backgro
 <td style="text-align: right;">TRUE</td>
 <td>地址不为空时，启动后自动检查一次；不会未经确认自动安装</td>
 </tr>
+<tr>
+<td>更新检查间隔小时</td>
+<td style="text-align: right;">24</td>
+<td>程序持续运行时每隔多少小时检查；最低 1 小时</td>
+</tr>
+<tr>
+<td>自动安装更新</td>
+<td style="text-align: right;">FALSE</td>
+<td>FALSE 发现新版后询问；TRUE 下载校验后自动重启安装</td>
+</tr>
 </tbody>
 </table>
 <h3 id="52">5.2 “监控列表”工作表</h3>
@@ -605,6 +615,16 @@ blockquote{margin:18px 0;padding:12px 18px;border-left:5px solid #e49b26;backgro
 <li>替换程序和手册；</li>
 <li>自动重新启动。</li>
 </ol>
+<p>默认更新策略为：</p>
+<ul>
+<li>每次启动约 2.5 秒后检查一次；</li>
+<li>程序持续运行时每 24 小时检查一次，可通过“更新检查间隔小时”调整；</li>
+<li>不在每轮行情轮询前检查，避免频繁访问 GitHub；</li>
+<li>不在退出时检查，避免用户明确退出时被更新阻挡；</li>
+<li>默认“自动安装更新”为 FALSE，发现新版后弹窗确认；</li>
+<li>开启“自动安装更新”后，周期检查发现新版会自动下载、校验、退出、替换和重启。</li>
+</ul>
+<p>建议保持自动安装关闭，尤其在交易时段；这样既能及时收到新版提示，也不会未经确认中断当前轮询。</p>
 <p>在线更新<strong>不会覆盖</strong>：</p>
 <ul>
 <li><code>可转债监控.xlsx</code>；</li>

@@ -265,3 +265,12 @@ def test_blank_enabled_cell_defaults_to_enabled(tmp_path):
     wb.close()
     _, bonds = load_configuration(workbook)
     assert [bond.code for bond in bonds] == ["127049"]
+
+
+def test_update_schedule_defaults_and_minimum(tmp_path):
+    workbook = tmp_path / "monitor.xlsx"
+    create_workbook(workbook, ["113043"])
+    settings, _ = load_configuration(workbook)
+    assert settings.check_updates_on_startup is True
+    assert settings.update_check_interval_hours == 24
+    assert settings.auto_install_updates is False
