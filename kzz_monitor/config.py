@@ -20,7 +20,7 @@ BONDS_SHEET = "监控列表"
 ALERTS_SHEET = "提醒记录"
 GUIDE_SHEET = "使用说明"
 PARAMETERS_SHEET = "参数说明"
-WORKBOOK_SCHEMA_VERSION = "1.4.0"
+WORKBOOK_SCHEMA_VERSION = "1.4.1"
 DEFAULT_UPDATE_MANIFEST_URL = (
     "https://github.com/hajiao/kzz-monitor/releases/latest/download/update-manifest.json"
 )
@@ -106,6 +106,8 @@ PARAMETER_ROWS = [
     ("刷新安道全", "控制台按钮", "立即按代码覆盖当周评价、建仓线、加仓线和重仓线。"),
     ("SMTP SSL", "465=开；587=关", "关闭 SSL 时使用 STARTTLS；以邮箱服务商说明为准。"),
     ("监控峰值", "程序维护", "当前已突破观察价的合格波段峰值；低位新波段不会借用旧高峰，空闲时为0。"),
+    ("短期波动过滤", "组合条件", "主要靠回撤提醒%，并同时受卖出观察价、趋势窗口、趋势最小跌幅及下跌次数共同过滤。"),
+    ("均衡参数建议", "5% / 3–5 / 0.2", "回撤约5%、趋势窗口3–5、趋势最小跌幅0.2作为低频监控初始值，再按误报调整。"),
     ("近一年最高价", "程序维护", "最近 365 天历史最高价，当前主要用于展示。"),
     ("更新清单地址", "HTTPS/共享路径", "指向 update-manifest.json；更新只替换程序和手册，不覆盖用户 Excel、data 或 logs。"),
     ("更新检查间隔小时", "24", "程序保持运行时的自动检查周期；最低 1 小时。不会在每轮询前请求。"),

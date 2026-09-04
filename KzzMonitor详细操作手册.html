@@ -494,6 +494,94 @@ blockquote{margin:18px 0;padding:12px 18px;border-left:5px solid #e49b26;backgro
 <li>低位形成的新局部峰值未达到观察价时，随后下降不会借用旧高峰提醒。</li>
 </ol>
 <p>例如旧波段从 140 跌到 120 并完成提醒，随后反弹形成 121 的低峰，再跌到 119：新峰 121 没达到观察价 130，因此不会再次提醒。升级到本逻辑时，旧版本基于永久峰值留下的卖出锁定会自动清除。</p>
+<h4 id="721">7.2.1 如何过滤短期波动</h4>
+<p>短期波动主要由“回撤提醒%”过滤，但不是只依靠一个参数。完整过滤由四层条件共同完成：</p>
+<ol>
+<li><strong>卖出观察价</strong>：当前波段必须先达到观察价，低位波动不会武装卖出提醒；</li>
+<li><strong>回撤提醒%</strong>：控制从本波段峰值至少回撤多少比例，是过滤普通小回调的主要参数；</li>
+<li><strong>趋势窗口</strong>：使用最近多少次采样判断方向，窗口越大越平滑，但提醒越慢；</li>
+<li><strong>趋势最小跌幅</strong>：窗口首尾至少下降多少绝对价格才算下降，用于过滤几分钱或几毛钱的抖动。</li>
+</ol>
+<p>程序还要求窗口内下跌次数不少于上涨次数。因此首次卖出提醒条件为：</p>
+<pre><code class="language-text">当前波段峰值达到观察价
+并且 波段回撤达到回撤提醒%
+并且 窗口首尾下降达到趋势最小跌幅
+并且 下跌次数不少于上涨次数
+</code></pre>
+<p>假设当前波段峰值为 140，不同回撤阈值对应的价格如下：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">回撤阈值</th>
+<th style="text-align: right;">达到阈值的价格</th>
+<th>特点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">2%</td>
+<td style="text-align: right;">137.20</td>
+<td>很灵敏，容易受短期回调影响</td>
+</tr>
+<tr>
+<td style="text-align: right;">3%</td>
+<td style="text-align: right;">135.80</td>
+<td>偏灵敏</td>
+</tr>
+<tr>
+<td style="text-align: right;">5%</td>
+<td style="text-align: right;">133.00</td>
+<td>较均衡</td>
+</tr>
+<tr>
+<td style="text-align: right;">8%</td>
+<td style="text-align: right;">128.80</td>
+<td>过滤更多波动，但提醒较晚</td>
+</tr>
+</tbody>
+</table>
+<p>趋势窗口同样必须结合实际采样周期理解。若同一只转债每小时更新一次：</p>
+<ul>
+<li>窗口 3：大致比较最近 2 小时的首尾变化；</li>
+<li>窗口 5：大致比较最近 4 小时；</li>
+<li>窗口 8：大致比较最近 7 小时。</li>
+</ul>
+<p>参数建议：</p>
+<table>
+<thead>
+<tr>
+<th>风格</th>
+<th style="text-align: right;">回撤提醒%</th>
+<th style="text-align: right;">趋势窗口</th>
+<th style="text-align: right;">趋势最小跌幅</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>偏灵敏</td>
+<td style="text-align: right;">2%–3%</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0.1</td>
+<td>提醒早，短期噪声较多</td>
+</tr>
+<tr>
+<td>均衡</td>
+<td style="text-align: right;">4%–5%</td>
+<td style="text-align: right;">3–5</td>
+<td style="text-align: right;">0.2–0.3</td>
+<td>推荐作为初始设置</td>
+</tr>
+<tr>
+<td>偏稳健</td>
+<td style="text-align: right;">6%–8%</td>
+<td style="text-align: right;">5–8</td>
+<td style="text-align: right;">0.3–0.5</td>
+<td>过滤更多波动，提醒较晚</td>
+</tr>
+</tbody>
+</table>
+<p>对于当前低频模式，建议先使用“回撤 5% + 趋势窗口 3–5 + 趋势最小跌幅 0.2”，运行几个交易日后再根据误报和滞后情况调整。</p>
 <blockquote>
 <p>这是“观察提醒”，不是自动交易指令。</p>
 </blockquote>
