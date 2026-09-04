@@ -246,16 +246,22 @@ class MonitorApp:
         search_line.grid(row=0, column=0, columnspan=8, sticky="ew", pady=(0, 7))
         ttk.Label(search_line, text="快速查找（代码/名称）").pack(side="left", padx=(0, 6))
         self.bond_search_var = tk.StringVar()
-        self.bond_search_combo = ttk.Combobox(
-            search_line, textvariable=self.bond_search_var, state="normal", width=42
-        )
-        self.bond_search_combo.pack(side="left", fill="x", expand=True)
-        self.bond_search_combo.bind("<KeyRelease>", self._update_bond_search_suggestions)
-        self.bond_search_combo.bind("<Up>", self._return_to_search_edit)
-        self.bond_search_combo.bind("<Escape>", self._return_to_search_edit)
-        self.bond_search_combo.bind("<<ComboboxSelected>>", self._select_bond_search_result)
-        self.bond_search_combo.bind("<Return>", self._select_bond_search_result)
+        self.bond_search_entry = ttk.Entry(search_line, textvariable=self.bond_search_var, width=42)
+        self.bond_search_entry.pack(side="left", fill="x", expand=True)
+        self.bond_search_entry.bind("<KeyRelease>", self._update_bond_search_suggestions)
+        self.bond_search_entry.bind("<Down>", self._start_bond_search_selection)
+        self.bond_search_entry.bind("<Escape>", self._return_to_search_edit)
+        self.bond_search_entry.bind("<Return>", self._select_bond_search_result)
         ttk.Label(search_line, text="输入部分代码或名称，选择后自动回填").pack(side="left", padx=(8, 0))
+        self.bond_search_list = tk.Listbox(
+            editor, height=5, exportselection=False, activestyle="dotbox",
+            font=("Microsoft YaHei UI", 9),
+        )
+        self.bond_search_list.bind("<Return>", self._select_bond_search_result)
+        self.bond_search_list.bind("<Double-Button-1>", self._select_bond_search_result)
+        self.bond_search_list.bind("<ButtonRelease-1>", self._select_bond_search_result)
+        self.bond_search_list.bind("<Up>", self._bond_search_list_up)
+        self.bond_search_list.bind("<Escape>", self._return_to_search_edit)
         fields = (
             ("启用", "启用", "check"), ("转债代码", "转债代码", "entry"),
             ("名称", "名称", "entry"), ("卖出观察价", "卖出观察价", "entry"),
@@ -266,7 +272,7 @@ class MonitorApp:
         )
         for index, (key, label, kind) in enumerate(fields):
             field_row, pair = divmod(index, 4)
-            row = field_row + 1
+            row = field_row + 2
             column = pair * 2
             ttk.Label(editor, text=label).grid(row=row, column=column, sticky="w", padx=(0, 4), pady=3)
             variable: tk.Variable = tk.BooleanVar(value=True) if kind == "check" else tk.StringVar()
@@ -278,7 +284,7 @@ class MonitorApp:
         for column in (1, 3, 5, 7):
             editor.columnconfigure(column, weight=1)
         buttons = ttk.Frame(editor)
-        buttons.grid(row=4, column=0, columnspan=8, sticky="ew", pady=(7, 0))
+        buttons.grid(row=5, column=0, columnspan=8, sticky="ew", pady=(7, 0))
         ttk.Button(buttons, text="新增/保存", command=self.save_bond).pack(side="left")
         ttk.Button(buttons, text="删除选中", command=self.delete_selected_bond).pack(side="left", padx=6)
         ttk.Button(buttons, text="清空表单", command=self.clear_bond_form).pack(side="left", padx=6)
@@ -372,7 +378,6 @@ class MonitorApp:
         try:
             self.pending_excel_count = pending
             self.last_cycle_text = last_cycle
-            selected_code = str(self.bond_vars["转债代码"].get()) if self.bond_vars else ""
             self.monitor_rows_by_code = {
                 str(row.get("转债代码") or ""): row for row in reversed(all_rows)
             }
@@ -395,9 +400,7 @@ class MonitorApp:
                     for column in columns
                 ]
                 tag = visual.key if visual.key != "normal" else f"normal-{'even' if index % 2 == 0 else 'odd'}"
-                item = self.monitor_tree.insert("", "end", iid=f"row-{index}", values=values, tags=(tag,))
-                if code == selected_code:
-                    self.monitor_tree.selection_set(item)
+                self.monitor_tree.insert("", "end", iid=f"row-{index}", values=values, tags=(tag,))
             duplicates = {code: count for code, count in counts.items() if count > 1}
             if duplicates:
                 detail = "，".join(f"{code}×{count}" for code, count in duplicates.items())
@@ -462,7 +465,6 @@ class MonitorApp:
             name = str(row.get("名称") or "").strip()
             label = f"{code} | {name}".rstrip(" |")
             self.search_labels[label] = code
-        self.bond_search_combo.configure(values=list(self.search_labels))
 
     def _update_bond_search_suggestions(self, _event: object = None) -> None:
         if _event is not None and getattr(_event, "keysym", "") in {
@@ -478,21 +480,46 @@ class MonitorApp:
             f"{str(row.get('转债代码') or '').strip()} | {str(row.get('名称') or '').strip()}".rstrip(" |")
             for row in matches
         ]
-        self.bond_search_combo.configure(values=labels)
+        self.bond_search_list.delete(0, "end")
+        for label in labels:
+            self.bond_search_list.insert("end", label)
+        if query.strip() and labels:
+            self.bond_search_list.grid(row=1, column=0, columnspan=8, sticky="ew", pady=(0, 7))
+        else:
+            self.bond_search_list.grid_remove()
+
+    def _start_bond_search_selection(self, _event: object = None) -> str:
+        if self.bond_search_list.size() == 0:
+            self._update_bond_search_suggestions()
+        if self.bond_search_list.size() > 0:
+            self.bond_search_list.selection_clear(0, "end")
+            self.bond_search_list.selection_set(0)
+            self.bond_search_list.activate(0)
+            self.bond_search_list.focus_set()
+        return "break"
+
+    def _bond_search_list_up(self, _event: object = None) -> str | None:
+        selection = self.bond_search_list.curselection()
+        if not selection or selection[0] <= 0:
+            return self._return_to_search_edit()
+        return None
 
     def _return_to_search_edit(self, _event: object = None) -> str:
-        try:
-            self.root.tk.call("ttk::combobox::Unpost", str(self.bond_search_combo))
-        except tk.TclError:
-            pass
+        self.bond_search_list.grid_remove()
+        self.bond_search_list.selection_clear(0, "end")
         self.bond_search_var.set(self.search_edit_text)
-        self.bond_search_combo.focus_set()
-        self.bond_search_combo.icursor("end")
-        self.bond_search_combo.selection_clear()
+        self.bond_search_entry.focus_set()
+        self.bond_search_entry.icursor("end")
+        self.bond_search_entry.selection_clear()
         return "break"
 
     def _select_bond_search_result(self, _event: object = None) -> None:
-        query = self.bond_search_var.get().strip()
+        selection = self.bond_search_list.curselection()
+        if selection:
+            query = str(self.bond_search_list.get(selection[0])).strip()
+            self.bond_search_var.set(query)
+        else:
+            query = self.bond_search_var.get().strip()
         code = self.search_labels.get(query)
         source = self.monitor_rows_by_code.get(code or "")
         if source is None:
@@ -503,10 +530,11 @@ class MonitorApp:
                 self.monitor_message.configure(text=f"找到 {len(matches)} 条匹配，请从下拉列表选择")
                 return
         if source is not None:
+            self.bond_search_list.grid_remove()
             self._fill_bond_form(source)
             self._select_tree_code(str(source.get("转债代码") or ""))
-            self.bond_search_combo.focus_set()
-            self.bond_search_combo.icursor("end")
+            self.bond_search_entry.focus_set()
+            self.bond_search_entry.icursor("end")
 
     def _lookup_from_editor(self, field: str) -> None:
         query = str(self.bond_vars[field].get()).strip()
@@ -543,6 +571,8 @@ class MonitorApp:
             self.bond_vars[key].set(value)
         if hasattr(self, "bond_search_var"):
             self.bond_search_var.set("")
+        if hasattr(self, "bond_search_list"):
+            self.bond_search_list.grid_remove()
         if hasattr(self, "monitor_tree"):
             self.monitor_tree.selection_remove(self.monitor_tree.selection())
 

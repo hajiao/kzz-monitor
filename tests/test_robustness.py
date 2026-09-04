@@ -5,6 +5,8 @@ import os
 import queue
 import threading
 import time
+import tkinter as tk
+from tkinter import ttk
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -277,6 +279,35 @@ def test_ui_action_queue_executes_callbacks_on_drain():
     app._drain_ui_actions()
     assert received == ["from-worker"]
     assert app.root.after_calls[0][0] == 100
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk keyboard regression")
+def test_search_suggestions_do_not_replace_typed_text_and_keyboard_returns_to_editing():
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        app = object.__new__(MonitorApp)
+        app.root = root
+        app.monitor_rows_by_code = {
+            "113043": {"转债代码": "113043", "名称": "财通转债"},
+            "113056": {"转债代码": "113056", "名称": "重银转债"},
+        }
+        app.bond_search_var = tk.StringVar(value="113")
+        app.search_edit_text = ""
+        app.bond_search_entry = ttk.Entry(root, textvariable=app.bond_search_var)
+        app.bond_search_list = tk.Listbox(root)
+        app.bond_search_list.grid(row=1, column=0)
+        app._update_bond_search_suggestions()
+        assert app.bond_search_var.get() == "113"
+        assert app.search_edit_text == "113"
+        assert app.bond_search_list.get(0, "end") == ("113043 | 财通转债", "113056 | 重银转债")
+        assert app._start_bond_search_selection() == "break"
+        assert app.bond_search_list.curselection() == (0,)
+        app.bond_search_var.set("changed-by-list")
+        assert app._bond_search_list_up() == "break"
+        assert app.bond_search_var.get() == "113"
+    finally:
+        root.destroy()
 
 
 def write_zip(path: Path, members: list[tuple[zipfile.ZipInfo | str, bytes]]) -> None:
